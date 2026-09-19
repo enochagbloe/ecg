@@ -1,3 +1,4 @@
+import { meterConstantSchema } from "./meterConstant";
 import type { MeterState } from "@prisma/client";
 
 export type StoredState = Pick<MeterState,
@@ -8,13 +9,13 @@ export function emptyState(): StoredState {
 }
 
 export function energyFromPulses(totalPulses: bigint, meterConstant: number): number {
-  if (!Number.isInteger(meterConstant) || meterConstant <= 0) throw new Error("Invalid meter constant");
+  meterConstantSchema.parse(meterConstant);
   if (totalPulses < 0n || totalPulses > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Pulse count outside JSON safe integer range");
   return Number(totalPulses) / meterConstant;
 }
 
 export function powerFromInterval(intervalMs: number, meterConstant: number): number {
-  if (!Number.isInteger(meterConstant) || meterConstant <= 0) throw new Error("Invalid meter constant");
+  meterConstantSchema.parse(meterConstant);
   return intervalMs > 0 ? 3_600_000 / (meterConstant * intervalMs) : 0;
 }
 

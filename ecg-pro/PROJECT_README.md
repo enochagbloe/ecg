@@ -17,7 +17,8 @@ Use Node.js 20.19+ (Node.js 24 is supported).
 3. Supply `DATABASE_URL` for your PostgreSQL database. No real URL or device secret is committed.
 4. Generate independent high-entropy secrets (for example `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`). Set `BOOTSTRAP_DEVICE_SECRET` and a different `DASHBOARD_PASSWORD`; both must be at least 32 characters. Set `DASHBOARD_USERNAME`.
 5. Set `BOOTSTRAP_DEVICE_ID` and `NEXT_PUBLIC_DEVICE_ID` to the same hardware ID (default `ECG-001`).
-6. Run:
+6. Set `BOOTSTRAP_METER_CONSTANT` to the imp/kWh value printed on your physical meter (required; no default).
+7. Run:
 
 ```bash
 npm run db:generate
@@ -26,7 +27,7 @@ npm run db:seed
 npm run dev
 ```
 
-`db:deploy` applies the checked-in initial migration. For schema development against a development database, run `npm run db:migrate -- --name describe_change`; Prisma migrate dev requires permission to create/use a shadow database. Do not run migrate dev against production. `npm run db:studio` opens the database editor.
+`db:deploy` applies all checked-in migrations, including the migration removing the meter-constant default. This preserves existing calibrations and the positive-value constraint; published migration history remains unchanged. For schema development against a development database, run `npm run db:migrate -- --name describe_change`; Prisma migrate dev requires permission to create/use a shadow database. Do not run migrate dev against production. `npm run db:studio` opens the database editor.
 
 The Prisma CLI, seed, and custom server load `.env.local`, then `.env`, respecting environment variables already supplied by the deployment. Client generation needs no live database. Migrations, seed, and ingestion require a working PostgreSQL connection.
 
@@ -76,7 +77,7 @@ New pulse response (201):
 }
 ```
 
-The totals in this example assume 1846 earlier distinct stored pulses. Sequence is an identity, not a total.
+The totals in this example assume an explicitly configured 1600 imp/kWh meter and 1846 earlier distinct stored pulses. Sequence is an identity, not a total.
 
 A retry returns 200 with `duplicate: true` and current state; it does not create an event, increment energy, or broadcast a new pulse.
 
@@ -101,9 +102,21 @@ Only SHA-256 hashes of high-entropy device tokens are stored. Comparisons use No
 
 The dashboard read credential is separate from device write credentials. The authenticated administrator can read all device states and receive all pulse broadcasts; the current UI filters by `NEXT_PUBLIC_DEVICE_ID`. Mobile clients can use dashboard Basic authentication for reads at this stage. Replace the centralized viewer authorization boundary with user access controls before introducing multiple tenants.
 
+## Meter calibration
+
+Read the pulse constant printed on the physical electricity meter, normally marked **imp/kWh**. Meters can use 800, 1000, 1600, or 3200 imp/kWh; there is no universal default.
+
+During provisioning, the user must supply the hardware ID, device secret, and this printed meter constant. Set `BOOTSTRAP_METER_CONSTANT` to that value before seeding; the example value of 1600 is only a sample, not a fallback. Provisioning accepts integers from 1 through 100000 and rejects missing, zero, negative, fractional, non-numeric, and larger values.
+
+The backend stores calibration on each Device and uses `device.meterConstant` for all authoritative energy and power calculations. The state API includes `meterConstant`. The ESP32 may store the same configured value for offline OLED calculations, but its calculated telemetry is not accepted by the backend.
+
+Rerunning seed rotates credentials while preserving the existing meter constant, even if the bootstrap environment value changes. Changing calibration after pulse history exists reinterprets historical energy. Any later change must use a separate, explicit meter replacement/calibration workflow that accounts for history; there is no generic calibration update route.
+
+The shared provisioning contract lives in `server/services/deviceProvisioningService.ts`; future provisioning flows must use its required hardware ID, secret, and validated meter constant.
+
 ## Database and calculation rules
 
-- **Device:** unique hardwareId, hashed API key, name/firmware metadata, active flag, liveness, and meter constant (default 1600 imp/kWh).
+- **Device:** unique hardwareId, hashed API key, name/firmware metadata, active flag, liveness, and explicitly configured meter constant (no default).
 - **PulseEvent:** device FK, sequence, occurredAt (device/RTC time), receivedAt (server time), createdAt; unique (deviceId, sequence), indexed (deviceId, occurredAt).
 - **MeterState:** one row per device; integer totalPulses, maximum sequence, non-regressing lastPulseAt, lastIntervalMs, powerKw, updatedAt. Energy is derived, never accumulated or accepted from devices.
 

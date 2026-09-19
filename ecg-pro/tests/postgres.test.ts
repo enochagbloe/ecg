@@ -14,7 +14,7 @@ test("PostgreSQL: concurrent retries and unique events remain consistent across 
   const clients = [new PrismaClient(options), new PrismaClient(options)];
   const hardwareId = "test-" + randomBytes(12).toString("hex");
   const token = randomBytes(32).toString("hex");
-  const device = await clients[0].device.create({ data: { hardwareId, apiKeyHash: hashSecret(token) } });
+  const device = await clients[0].device.create({ data: { hardwareId, apiKeyHash: hashSecret(token), meterConstant: 1600 } });
   try {
     const stores = clients.map(createPrismaPulseStore);
     const input = { deviceId: hardwareId, pulse: 1 as const, sequence: 1, timestamp: "2026-09-19T08:00:00.000Z" };

@@ -63,6 +63,9 @@ test("authoritative pulse energy and consecutive interval power", () => {
   assert.equal(powerFromInterval(0, 1600), 0);
   assert.equal(powerFromInterval(-1, 1600), 0);
   assert.equal(energyFromPulses(1000n, 1000), 1);
+  assert.equal(energyFromPulses(1n, 1000), 0.001);
+  assert.equal(energyFromPulses(1n, 800), 0.00125);
+  assert.equal(powerFromInterval(1000, 1000), 3.6);
 });
 
 test("strict schema rejects authoritative telemetry and malformed values", () => {
@@ -162,3 +165,22 @@ test("transaction failure rolls back raw event, state, and lastSeenAt", async ()
   assert.equal(store.state, null);
   assert.equal(store.device.lastSeenAt, null);
 });
+for (const [meterConstant, energy, power] of [
+  [800, 0.00125, 4.5],
+  [1000, 0.001, 3.6],
+  [1600, 0.000625, 2.25],
+  [3200, 0.0003125, 1.125],
+]) {
+  test(`ingestion uses the device's ${meterConstant} imp/kWh calibration`, async () => {
+    const store = new MemoryStore();
+    store.device.meterConstant = meterConstant;
+    const first = await processPulse(store, input(1), token);
+    assert.equal(first.state.energyKWh, energy);
+    const second = await processPulse(store, input(2, 1000), token);
+    assert.equal(second.state.energyKWh, energy * 2);
+    assert.equal(second.state.powerKw, power);
+    assert.equal(pulseBroadcast(second)?.powerKw, power);
+    const heartbeat = await processPulse(store, input(2, 1000, 0), token);
+    assert.equal(heartbeat.state.energyKWh, energy * 2);
+  });
+}

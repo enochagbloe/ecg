@@ -12,7 +12,7 @@ model Device {
   hardwareId      String       @unique
   name            String?
   apiKeyHash      String
-  meterConstant   Int          @default(1600)
+  meterConstant   Int
   isActive        Boolean      @default(true)
   lastSeenAt      DateTime?    @db.Timestamptz(3)
   firmwareVersion String?

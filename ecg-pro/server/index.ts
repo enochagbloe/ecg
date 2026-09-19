@@ -1,37 +1,72 @@
-import dotenv from "dotenv";
-
-// Load environment variables FIRST before any other imports
-const result = dotenv.config({ path: ".env.local" });
-console.log("Dotenv result:", result.error ? result.error : "Loaded successfully");
-console.log("MONGODB_URI:", process.env.MONGODB_URI ? "Found" : "NOT FOUND");
-
-import { createServer } from "http";
+import "../libs/env";
+import { createServer } from "node:http";
 import next from "next";
 import { initializeSocket } from "./socketServer";
 import logger from "../libs/logger";
-import ECGMonitor from "../injest/ecg_plot"; // Import to start serial port monitoring
+import { prisma } from "../libs/prisma";
+import { devicePulse } from "./routes/devicePulse";
+import { deviceState } from "./routes/deviceState";
+import { authorizeViewer } from "./services/viewerAuthService";
+import { HttpError, json } from "./utils/http";
 
-const dev = process.env.NODE_ENV !== "production";
-const hostname = "localhost";
-const port = parseInt(process.env.PORT || "3000", 10);
+async function main() {
+  const dev = process.env.NODE_ENV !== "production";
+  const hostname = process.env.HOST || "0.0.0.0";
+  const port = Number(process.env.PORT || 3000);
+  const app = next({ dev, hostname, port });
+  const handle = app.getRequestHandler();
+  await app.prepare();
 
-const app = next({ dev, hostname, port });
-const handle = app.getRequestHandler();
-
-app.prepare().then(() => {
-  const httpServer = createServer((req, res) => {
-    handle(req, res);
+  const httpServer = createServer(async (req, res) => {
+    try {
+      const pathname = new URL(req.url || "/", "http://localhost").pathname;
+      if (pathname === "/api/v1/device/pulse") {
+        if (req.method !== "POST") {
+          res.setHeader("Allow", "POST");
+          throw new HttpError(405, "Method not allowed");
+        }
+        await devicePulse(req, res);
+        return;
+      }
+      const stateMatch = /^\/api\/v1\/devices\/([A-Za-z0-9_-]+)\/state$/.exec(pathname);
+      if (stateMatch) {
+        if (req.method !== "GET") {
+          res.setHeader("Allow", "GET");
+          throw new HttpError(405, "Method not allowed");
+        }
+        await deviceState(req, res, stateMatch[1]);
+        return;
+      }
+      if (pathname.startsWith("/api/v1/")) throw new HttpError(404, "Endpoint not found");
+      if (pathname === "/") authorizeViewer(req, res);
+      await handle(req, res);
+    } catch (error) {
+      const status = error instanceof HttpError ? error.status : 500;
+      // Do not log request headers, bodies, device secrets, or connection URLs.
+      if (status === 500) logger.error({ errorType: error instanceof Error ? error.name : "UnknownError" }, "Request failed");
+      if (!res.headersSent) {
+        if (status === 413) res.setHeader("Connection", "close");
+        json(res, status, { ok: false, error: error instanceof HttpError ? error.message : "Internal server error" });
+      } else res.end();
+    }
   });
+  httpServer.requestTimeout = 15_000;
+  httpServer.headersTimeout = 10_000;
+  const io = initializeSocket(httpServer);
+  httpServer.listen(port, hostname, () => logger.info(`Ready on port ${port}`));
+  httpServer.on("error", () => { logger.error("HTTP server failed"); process.exitCode = 1; });
 
-  // Initialize Socket.io
-  initializeSocket(httpServer);
-  logger.info("Socket.io server initialized");
-  
-  // Start ECG monitor
-  new ECGMonitor();
-  logger.info("ECG Monitor started");
-
-  httpServer.listen(port, () => {
-    logger.info(`> Ready on http://${hostname}:${port}`);
-  });
-});
+  let shuttingDown = false;
+  const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    io.close();
+    httpServer.close(() => {
+      void prisma.$disconnect().then(() => process.exit(0), () => process.exit(1));
+    });
+    setTimeout(() => process.exit(1), 10_000).unref();
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+}
+main().catch(() => { logger.error("Server startup failed"); process.exitCode = 1; });

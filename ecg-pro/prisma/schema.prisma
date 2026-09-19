@@ -1,0 +1,47 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Device {
+  id              String       @id @default(cuid())
+  hardwareId      String       @unique
+  name            String?
+  apiKeyHash      String
+  meterConstant   Int          @default(1600)
+  isActive        Boolean      @default(true)
+  lastSeenAt      DateTime?    @db.Timestamptz(3)
+  firmwareVersion String?
+  createdAt       DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime     @updatedAt @db.Timestamptz(3)
+  pulseEvents     PulseEvent[]
+  meterState      MeterState?
+}
+
+model PulseEvent {
+  id         String   @id @default(cuid())
+  deviceId   String
+  device     Device   @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  sequence   BigInt
+  occurredAt DateTime @db.Timestamptz(3)
+  receivedAt DateTime @default(now()) @db.Timestamptz(3)
+  createdAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([deviceId, sequence])
+  @@index([deviceId, occurredAt])
+}
+
+model MeterState {
+  deviceId       String   @id
+  device         Device   @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  totalPulses    BigInt   @default(0)
+  lastSequence   BigInt?
+  lastPulseAt    DateTime? @db.Timestamptz(3)
+  lastIntervalMs BigInt?
+  powerKw        Float    @default(0)
+  updatedAt      DateTime @updatedAt @db.Timestamptz(3)
+}

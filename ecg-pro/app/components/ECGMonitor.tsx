@@ -4,8 +4,9 @@ import { useEffect, useState } from "react";
 import { io } from "socket.io-client";
 
 interface PulseData {
+  deviceId: string;
   pulseCount: number;
-  timestamp: string;
+  timestamp: string | null;
   energyKWh: number;
   powerKw: number;
 }
@@ -13,28 +14,42 @@ interface PulseData {
 export default function ECGMonitor() {
   const [pulseData, setPulseData] = useState<PulseData | null>(null);
   const [isConnected, setIsConnected] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Initialize socket connection
-    const socketInstance = io(process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:3000", {
-      transports: ["websocket"],
-    });
-
+    const deviceId = process.env.NEXT_PUBLIC_DEVICE_ID || "ECG-001";
+    const controller = new AbortController();
+    let active = true;
+    const update = (data: PulseData) => {
+      if (!active || data.deviceId !== deviceId) return;
+      setPulseData((previous) => previous && previous.pulseCount > data.pulseCount ? previous : data);
+      setLoadError(null);
+    };
+    const loadState = async () => {
+      try {
+        const response = await fetch(`/api/v1/devices/${encodeURIComponent(deviceId)}/state`, {
+          credentials: "same-origin", cache: "no-store", signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`Unable to load meter state (HTTP ${response.status}).`);
+        const state: { deviceId: string; totalPulses: number; lastPulseAt: string | null; energyKWh: number; powerKw: number } = await response.json();
+        update({ deviceId: state.deviceId, pulseCount: state.totalPulses, timestamp: state.lastPulseAt,
+          energyKWh: state.energyKWh, powerKw: state.powerKw });
+      } catch (error) {
+        if (active && !controller.signal.aborted) setLoadError(error instanceof Error ? error.message : "Unable to load meter state.");
+      }
+    };
+    const socketInstance = io({ transports: ["websocket"], withCredentials: true });
     socketInstance.on("connect", () => {
       setIsConnected(true);
-      console.log("Connected to WebSocket server");
+      void loadState();
     });
-
-    socketInstance.on("disconnect", () => {
-      setIsConnected(false);
-      console.log("Disconnected from WebSocket server");
-    });
-
-    socketInstance.on("pulseData", (data: PulseData) => {
-      setPulseData(data);
-    });
-
+    socketInstance.on("disconnect", () => setIsConnected(false));
+    socketInstance.on("connect_error", () => setIsConnected(false));
+    socketInstance.on("pulseData", update);
+    void loadState();
     return () => {
+      active = false;
+      controller.abort();
       socketInstance.disconnect();
     };
   }, []);
@@ -79,7 +94,7 @@ export default function ECGMonitor() {
               />
               <MetricCard
                 title="Last Update"
-                value={new Date(pulseData.timestamp).toLocaleTimeString()}
+                value={pulseData.timestamp ? new Date(pulseData.timestamp).toLocaleTimeString() : "—"}
                 unit=""
                 color="orange"
               />
@@ -87,7 +102,7 @@ export default function ECGMonitor() {
           ) : (
             <div className="text-center py-12">
               <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4" />
-              <p className="text-gray-600">Waiting for data...</p>
+              <p className="text-gray-600">{loadError || "Waiting for data..."}</p>
             </div>
           )}
         </div>

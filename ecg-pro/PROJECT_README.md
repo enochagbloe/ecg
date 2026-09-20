@@ -186,3 +186,36 @@ Client generation and unit tests are not proof that migrations or PostgreSQL int
 - `libs/prisma.ts`: development-safe shared Prisma client.
 - `prisma/schema.prisma`, `prisma/migrations/`, `prisma/seed.ts`: database lifecycle.
 - `app/components/ECGMonitor.tsx`: existing dashboard with state hydration.
+## Development/test data reset
+
+With the custom backend running, use:
+
+```bash
+pnpm reset:test-data ECG-001
+```
+
+The script loads dashboard credentials from `.env.local` and calls the running backend, never Prisma directly. The device argument can be omitted when `BOOTSTRAP_DEVICE_ID` is set. `RESET_API_URL` defaults to `http://localhost:3000`; remote URLs must use HTTPS. Requests do not follow redirects, and credentials are never printed.
+
+Endpoint: `POST /api/v1/devices/:deviceId/reset-test-data`
+
+Use the existing dashboard Basic credentials or authenticated viewer session, plus `X-ECG-Test-Reset: true`. ESP32 Bearer tokens cannot authorize this operation. Cross-origin browser requests are rejected. Wrong methods return 405 with `Allow: POST`; authenticated unknown devices return 404.
+
+This destructive endpoint is for test/development cleanup. It is available in development; in production it returns 404 unless the server has deliberately been started with `ENABLE_TEST_RESET=true` (default false). Authentication and the reset header are required even when enabled.
+
+One transaction locks the Device row using the same lock as pulse ingestion, deletes that device's PulseEvent history, upserts a zero/null MeterState, and clears lastSeenAt. Device identity, API key hash, meter constant, active status, name, firmware, and creation date are preserved. No schema migration is needed.
+
+After commit the shared Socket.io server broadcasts `deviceReset`:
+
+```json
+{"deviceId":"ECG-001","pulseCount":0,"energyKWh":0,"powerKw":0,"lastPulseAt":null,"lastSeenAt":null}
+```
+
+The HTTP response is 200:
+
+```json
+{"ok":true,"deviceId":"ECG-001","state":{"totalPulses":0,"energyKWh":0,"powerKw":0,"lastPulseAt":null,"lastSeenAt":null}}
+```
+
+Connected dashboards for that device immediately update React state to zeros/nulls, with no browser reload. Other devices are ignored. Stale in-flight state fetches cannot overwrite the reset; reconnecting loads an authoritative snapshot even when its count is lower. The connection indicator continues to describe the socket connection, not device liveness.
+
+A failed transaction rolls back and emits no reset event. Delivery is best effort after commit, as with pulseData; reconnect recovers missed events. Pause the test sender and clear its queued test pulses before resetting: history deletion also removes sequence deduplication records, so replayed pulses or new pulses can increase totals again. Do not use this operation to clear real production measurement history.

@@ -13,7 +13,8 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "reset:test-data": "tsx scripts/reset-device-test-data.ts"
   },
   "dependencies": {
     "dotenv": "^17.2.3",

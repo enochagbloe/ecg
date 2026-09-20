@@ -3,13 +3,7 @@
 import { useEffect, useState } from "react";
 import { io } from "socket.io-client";
 
-interface PulseData {
-  deviceId: string;
-  pulseCount: number;
-  timestamp: string | null;
-  energyKWh: number;
-  powerKw: number;
-}
+import { createMeterUpdates, type PulseData } from "./meterUpdates";
 
 export default function ECGMonitor() {
   const [pulseData, setPulseData] = useState<PulseData | null>(null);
@@ -20,22 +14,24 @@ export default function ECGMonitor() {
     const deviceId = process.env.NEXT_PUBLIC_DEVICE_ID || "ECG-001";
     const controller = new AbortController();
     let active = true;
-    const update = (data: PulseData) => {
-      if (!active || data.deviceId !== deviceId) return;
-      setPulseData((previous) => previous && previous.pulseCount > data.pulseCount ? previous : data);
+    const updates = createMeterUpdates(deviceId, (data) => {
+      if (!active) return;
+      setPulseData(data);
       setLoadError(null);
-    };
+    });
     const loadState = async () => {
+      const token = updates.beginSnapshot();
       try {
         const response = await fetch(`/api/v1/devices/${encodeURIComponent(deviceId)}/state`, {
           credentials: "same-origin", cache: "no-store", signal: controller.signal,
         });
         if (!response.ok) throw new Error(`Unable to load meter state (HTTP ${response.status}).`);
         const state: { deviceId: string; totalPulses: number; lastPulseAt: string | null; energyKWh: number; powerKw: number } = await response.json();
-        update({ deviceId: state.deviceId, pulseCount: state.totalPulses, timestamp: state.lastPulseAt,
+        if (!active) return;
+        updates.snapshot(token, { deviceId: state.deviceId, pulseCount: state.totalPulses, timestamp: state.lastPulseAt,
           energyKWh: state.energyKWh, powerKw: state.powerKw });
       } catch (error) {
-        if (active && !controller.signal.aborted) setLoadError(error instanceof Error ? error.message : "Unable to load meter state.");
+        if (active && !controller.signal.aborted && updates.isCurrent(token)) setLoadError(error instanceof Error ? error.message : "Unable to load meter state.");
       }
     };
     const socketInstance = io({ transports: ["websocket"], withCredentials: true });
@@ -45,7 +41,8 @@ export default function ECGMonitor() {
     });
     socketInstance.on("disconnect", () => setIsConnected(false));
     socketInstance.on("connect_error", () => setIsConnected(false));
-    socketInstance.on("pulseData", update);
+    socketInstance.on("pulseData", updates.pulse);
+    socketInstance.on("deviceReset", updates.reset);
     void loadState();
     return () => {
       active = false;

@@ -6,6 +6,9 @@ import logger from "../libs/logger";
 import { prisma } from "../libs/prisma";
 import { devicePulse } from "./routes/devicePulse";
 import { deviceState } from "./routes/deviceState";
+import { createDeviceResetHandler } from "./routes/deviceReset";
+import { createPrismaDeviceResetStore } from "./services/deviceResetService";
+import { getIO } from "./socketServer";
 import { authorizeViewer } from "./services/viewerAuthService";
 import { HttpError, json } from "./utils/http";
 
@@ -17,6 +20,7 @@ async function main() {
   const handle = app.getRequestHandler();
   await app.prepare();
 
+  const deviceReset = createDeviceResetHandler(createPrismaDeviceResetStore(prisma), (event) => getIO().emit("deviceReset", event));
   const httpServer = createServer(async (req, res) => {
     try {
       const pathname = new URL(req.url || "/", "http://localhost").pathname;
@@ -26,6 +30,11 @@ async function main() {
           throw new HttpError(405, "Method not allowed");
         }
         await devicePulse(req, res);
+        return;
+      }
+      const resetMatch = /^\/api\/v1\/devices\/([A-Za-z0-9_-]+)\/reset-test-data$/.exec(pathname);
+      if (resetMatch) {
+        await deviceReset(req, res, resetMatch[1]);
         return;
       }
       const stateMatch = /^\/api\/v1\/devices\/([A-Za-z0-9_-]+)\/state$/.exec(pathname);

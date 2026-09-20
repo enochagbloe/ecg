@@ -1,3 +1,4 @@
+import { createPrismaDeviceResetStore, resetDeviceTestData } from "../server/services/deviceResetService";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomBytes } from "node:crypto";
@@ -29,6 +30,21 @@ test("PostgreSQL: concurrent retries and unique events remain consistent across 
     assert.equal(state.lastSequence, 13n);
     await processPulse(stores[0], { ...input, pulse: 0 }, token);
     assert.equal(await clients[0].pulseEvent.count({ where: { deviceId: device.id } }), 13);
+    const beforeReset = await clients[0].device.findUniqueOrThrow({ where: { id: device.id } });
+    const resetStore = createPrismaDeviceResetStore(clients[0]);
+    await resetDeviceTestData(resetStore, hardwareId);
+    assert.equal(await clients[1].pulseEvent.count({ where: { deviceId: device.id } }), 0);
+    const resetState = await clients[1].meterState.findUniqueOrThrow({ where: { deviceId: device.id } });
+    assert.equal(resetState.totalPulses, 0n);
+    assert.equal(resetState.lastSequence, null);
+    assert.equal(resetState.lastPulseAt, null);
+    assert.equal(resetState.lastIntervalMs, null);
+    assert.equal(resetState.powerKw, 0);
+    const afterReset = await clients[1].device.findUniqueOrThrow({ where: { id: device.id } });
+    assert.deepEqual({ ...afterReset, updatedAt: beforeReset.updatedAt }, { ...beforeReset, lastSeenAt: null });
+    await clients[0].meterState.delete({ where: { deviceId: device.id } });
+    await resetDeviceTestData(resetStore, hardwareId);
+    assert.equal((await clients[1].meterState.findUniqueOrThrow({ where: { deviceId: device.id } })).totalPulses, 0n);
   } finally {
     await clients[0].pulseEvent.deleteMany({ where: { deviceId: device.id } });
     await clients[0].meterState.deleteMany({ where: { deviceId: device.id } });

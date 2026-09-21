@@ -8,6 +8,6 @@ async function seed() {
   console.log("Bootstrap device provisioned");
 }
 seed().catch(() => {
-  console.error("Seed failed. Check database connectivity and BOOTSTRAP_DEVICE_ID, BOOTSTRAP_DEVICE_SECRET, and BOOTSTRAP_METER_CONSTANT (integer 1–100000).");
+  console.error("Seed failed. Check database connectivity and BOOTSTRAP_DEVICE_ID, BOOTSTRAP_DEVICE_SECRET, BOOTSTRAP_METER_CONSTANT, and optional BOOTSTRAP_DEVICE_CLAIM_CODE.");
   process.exitCode = 1;
 }).finally(() => prisma.$disconnect());

@@ -8,18 +8,54 @@ datasource db {
 }
 
 model Device {
-  id              String       @id @default(cuid())
-  hardwareId      String       @unique
+  id              String           @id @default(cuid())
+  hardwareId      String           @unique
   name            String?
   apiKeyHash      String
+  claimCodeHash   String?
   meterConstant   Int
-  isActive        Boolean      @default(true)
-  lastSeenAt      DateTime?    @db.Timestamptz(3)
+  isActive        Boolean          @default(true)
+  lastSeenAt      DateTime?        @db.Timestamptz(3)
   firmwareVersion String?
-  createdAt       DateTime     @default(now()) @db.Timestamptz(3)
-  updatedAt       DateTime     @updatedAt @db.Timestamptz(3)
+  createdAt       DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime         @updatedAt @db.Timestamptz(3)
   pulseEvents     PulseEvent[]
   meterState      MeterState?
+  ownership       DeviceOwnership?
+}
+
+model CustomerUser {
+  id           String            @id @default(cuid())
+  fullName     String
+  email        String            @unique
+  passwordHash String
+  createdAt    DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime          @updatedAt @db.Timestamptz(3)
+  sessions     CustomerSession[]
+  devices      DeviceOwnership[]
+}
+
+model CustomerSession {
+  id        String       @id @default(cuid())
+  userId    String
+  user      CustomerUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String       @unique
+  expiresAt DateTime     @db.Timestamptz(3)
+  createdAt DateTime     @default(now()) @db.Timestamptz(3)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model DeviceOwnership {
+  id        String       @id @default(cuid())
+  userId    String
+  user      CustomerUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceId  String       @unique
+  device    Device       @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  createdAt DateTime     @default(now()) @db.Timestamptz(3)
+
+  @@index([userId])
 }
 
 model PulseEvent {
@@ -36,12 +72,12 @@ model PulseEvent {
 }
 
 model MeterState {
-  deviceId       String   @id
-  device         Device   @relation(fields: [deviceId], references: [id], onDelete: Restrict)
-  totalPulses    BigInt   @default(0)
+  deviceId       String    @id
+  device         Device    @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+  totalPulses    BigInt    @default(0)
   lastSequence   BigInt?
   lastPulseAt    DateTime? @db.Timestamptz(3)
   lastIntervalMs BigInt?
-  powerKw        Float    @default(0)
-  updatedAt      DateTime @updatedAt @db.Timestamptz(3)
+  powerKw        Float     @default(0)
+  updatedAt      DateTime  @updatedAt @db.Timestamptz(3)
 }

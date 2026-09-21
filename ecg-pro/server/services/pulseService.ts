@@ -12,7 +12,6 @@ export const pulseSchema = z.object({
 export type PulseInput = z.infer<typeof pulseSchema>;
 
 export interface PulseTransaction {
-  // Must lock this device until commit, including when its MeterState does not yet exist.
   lockDevice(hardwareId: string): Promise<Device | null>;
   getState(deviceId: string): Promise<StoredState | null>;
   hasEvent(deviceId: string, sequence: bigint): Promise<boolean>;
@@ -28,16 +27,24 @@ export interface PulseStore {
 export function processPulse(store: PulseStore, input: PulseInput, token: string) {
   return store.transaction(async (tx) => {
     const device = authenticateDevice(await tx.lockDevice(input.deviceId), token);
-    const receivedAt = new Date(); // Server time, after acquiring the device lock.
+    const receivedAt = new Date();
     const current = await tx.getState(device.id) ?? emptyState();
     await tx.touchDevice(device.id, receivedAt);
+
     if (input.pulse === 0) {
-      return { ok: true as const, heartbeat: true as const, deviceId: device.hardwareId,
-        state: serializeState(current, device.meterConstant) };
+      return {
+        ok: true as const,
+        heartbeat: true as const,
+        deviceId: device.hardwareId,
+        meterConstant: device.meterConstant,
+        state: serializeState(current, device.meterConstant),
+      };
     }
+
     const sequence = BigInt(input.sequence);
     const duplicate = await tx.hasEvent(device.id, sequence);
     let state = current;
+
     if (!duplicate) {
       const occurredAt = new Date(input.timestamp);
       const previousTime = current.lastSequence === null ? null : await tx.getEventTime(device.id, current.lastSequence);
@@ -46,12 +53,21 @@ export function processPulse(store: PulseStore, input: PulseInput, token: string
       await tx.createEvent({ deviceId: device.id, sequence, occurredAt, receivedAt });
       await tx.saveState(device.id, state);
     }
-    return { ok: true as const, accepted: true as const, duplicate, deviceId: device.hardwareId,
-      sequence: input.sequence, state: serializeState(state, device.meterConstant) };
+
+    return {
+      ok: true as const,
+      accepted: true as const,
+      duplicate,
+      deviceId: device.hardwareId,
+      sequence: input.sequence,
+      meterConstant: device.meterConstant,
+      state: serializeState(state, device.meterConstant),
+    };
   });
 }
 
 export type PulseResult = Awaited<ReturnType<typeof processPulse>>;
+
 export function pulseBroadcast(result: PulseResult) {
   if (!("duplicate" in result) || result.duplicate) return null;
   return {

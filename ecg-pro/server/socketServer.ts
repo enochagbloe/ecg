@@ -11,13 +11,9 @@ export function initializeSocket(httpServer: HTTPServer) {
 
   io = new SocketIOServer(httpServer, {
     cors: { origin, methods: ["GET", "POST"], credentials: true },
-    allowRequest: (req, callback) => {
-      if (req.headers.origin && req.headers.origin !== origin) {
-        callback("Origin not allowed", false);
-        return;
-      }
-      callback(null, true);
-    },
+    // Native mobile clients may supply no Origin or a platform-specific one.
+    // Authentication is enforced in Socket.io middleware below.
+    allowRequest: (_req, callback) => callback(null, true),
   });
 
   io.use(async (socket, next) => {

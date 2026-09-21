@@ -15,7 +15,7 @@ export const bootstrapEnvironmentSchema = z.object({
   BOOTSTRAP_DEVICE_ID: deviceProvisioningSchema.shape.hardwareId,
   BOOTSTRAP_DEVICE_SECRET: deviceProvisioningSchema.shape.secret,
   BOOTSTRAP_METER_CONSTANT: z.string().trim().regex(/^\d+$/).transform(Number).pipe(meterConstantSchema),
-  BOOTSTRAP_DEVICE_CLAIM_CODE: z.string().min(6).max(128).optional(),
+  BOOTSTRAP_DEVICE_CLAIM_CODE: z.string().min(6).max(128).refine((value) => !value.startsWith("replace-with-")).optional(),
 }).transform((env): DeviceProvisioningInput => ({
   hardwareId: env.BOOTSTRAP_DEVICE_ID,
   secret: env.BOOTSTRAP_DEVICE_SECRET,

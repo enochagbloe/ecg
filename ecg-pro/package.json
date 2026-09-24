@@ -15,7 +15,8 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
     "users:list": "tsx scripts/list-customer-users.ts",
-    "reset:test-data": "tsx scripts/reset-device-test-data.ts"
+    "reset:test-data": "tsx scripts/reset-device-test-data.ts",
+    "users:set-password": "tsx scripts/set-customer-password.ts"
   },
   "dependencies": {
     "dotenv": "^17.2.3",

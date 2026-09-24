@@ -9,6 +9,7 @@ import { deviceState } from "./routes/deviceState";
 import { createDeviceResetHandler } from "./routes/deviceReset";
 import { health } from "./routes/health";
 import {
+  customerChangePassword,
   customerForgotPassword,
   customerLogin,
   customerLogout,
@@ -67,6 +68,10 @@ async function main() {
       }
       if (pathname === "/api/v1/auth/login") {
         await customerLogin(req, res);
+        return;
+      }
+      if (pathname === "/api/v1/auth/change-password") {
+        await customerChangePassword(req, res);
         return;
       }
       if (pathname === "/api/v1/auth/me") {

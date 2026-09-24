@@ -113,6 +113,72 @@ export async function customerLogin(req: IncomingMessage, res: ServerResponse) {
   });
 }
 
+export async function customerChangePassword(
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
+  if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
+
+  const auth = await authorizeCustomer(req);
+  const parsed = z.object({
+    currentPassword: passwordSchema,
+    newPassword: passwordSchema,
+  }).strict().safeParse(await readJson(req));
+
+  if (!parsed.success) {
+    throw new HttpError(
+      400,
+      "Expected currentPassword and newPassword of 8-128 characters",
+    );
+  }
+
+  if (parsed.data.currentPassword === parsed.data.newPassword) {
+    throw new HttpError(
+      400,
+      "New password must be different from current password",
+    );
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    const user = await tx.customerUser.findUnique({
+      where: { id: auth.user.id },
+    });
+
+    if (
+      !user ||
+      !verifyCustomerPassword(
+        parsed.data.currentPassword,
+        user.passwordHash,
+      )
+    ) {
+      throw new HttpError(401, "Current password is incorrect");
+    }
+
+    const updated = await tx.customerUser.update({
+      where: { id: user.id },
+      data: {
+        passwordHash: hashCustomerPassword(parsed.data.newPassword),
+      },
+    });
+
+    // Revoke every old session after a password change. A fresh session is
+    // created below so the device performing the change remains signed in.
+    await tx.customerSession.deleteMany({
+      where: { userId: user.id },
+    });
+
+    const session = await createCustomerSession(user.id, tx);
+
+    return {
+      token: session.token,
+      expiresAt: session.expiresAt.toISOString(),
+      user: publicUser(updated),
+    };
+  });
+
+  json(res, 200, result);
+}
+
 export async function customerMe(req: IncomingMessage, res: ServerResponse) {
   if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
 

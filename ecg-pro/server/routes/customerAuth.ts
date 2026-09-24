@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../../libs/prisma";
 import {
@@ -6,12 +7,19 @@ import {
   createCustomerSession,
   customerBearerToken,
   hashCustomerPassword,
+  normalizeCustomerEmail,
   revokeCustomerSession,
   verifyCustomerPassword,
 } from "../services/customerAuthService";
 import { HttpError, json, readJson } from "../utils/http";
 
-const emailSchema = z.string().trim().email().max(254).transform((value) => value.toLowerCase());
+const emailSchema = z
+  .string()
+  .trim()
+  .email()
+  .max(254)
+  .transform(normalizeCustomerEmail);
+
 const passwordSchema = z.string().min(8).max(128);
 
 const registerSchema = z.object({
@@ -31,38 +39,73 @@ function publicUser(user: { id: string; fullName: string; email: string }) {
 
 export async function customerRegister(req: IncomingMessage, res: ServerResponse) {
   if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
+
   const parsed = registerSchema.safeParse(await readJson(req));
-  if (!parsed.success) throw new HttpError(400, "Expected fullName, valid email, and password of at least 8 characters");
+  if (!parsed.success) {
+    throw new HttpError(
+      400,
+      "Expected fullName, valid email, and password of 8-128 characters",
+    );
+  }
 
-  const existing = await prisma.customerUser.findUnique({ where: { email: parsed.data.email } });
-  if (existing) throw new HttpError(409, "An account with this email already exists");
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const existing = await tx.customerUser.findUnique({
+        where: { email: parsed.data.email },
+        select: { id: true },
+      });
 
-  const user = await prisma.customerUser.create({
-    data: {
-      fullName: parsed.data.fullName,
-      email: parsed.data.email,
-      passwordHash: hashCustomerPassword(parsed.data.password),
-    },
-  });
-  const session = await createCustomerSession(user.id);
-  json(res, 201, {
-    token: session.token,
-    expiresAt: session.expiresAt.toISOString(),
-    user: publicUser(user),
-  });
+      if (existing) {
+        throw new HttpError(409, "An account with this email already exists");
+      }
+
+      const user = await tx.customerUser.create({
+        data: {
+          fullName: parsed.data.fullName,
+          email: parsed.data.email,
+          passwordHash: hashCustomerPassword(parsed.data.password),
+        },
+      });
+
+      const session = await createCustomerSession(user.id, tx);
+
+      return {
+        token: session.token,
+        expiresAt: session.expiresAt.toISOString(),
+        user: publicUser(user),
+      };
+    });
+
+    json(res, 201, result);
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      throw new HttpError(409, "An account with this email already exists");
+    }
+    throw error;
+  }
 }
 
 export async function customerLogin(req: IncomingMessage, res: ServerResponse) {
   if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
-  const parsed = loginSchema.safeParse(await readJson(req));
-  if (!parsed.success) throw new HttpError(400, "Expected valid email and password");
 
-  const user = await prisma.customerUser.findUnique({ where: { email: parsed.data.email } });
+  const parsed = loginSchema.safeParse(await readJson(req));
+  if (!parsed.success) {
+    throw new HttpError(400, "Expected valid email and password");
+  }
+
+  const user = await prisma.customerUser.findUnique({
+    where: { email: parsed.data.email },
+  });
+
   if (!user || !verifyCustomerPassword(parsed.data.password, user.passwordHash)) {
     throw new HttpError(401, "Invalid email or password");
   }
 
   const session = await createCustomerSession(user.id);
+
   json(res, 200, {
     token: session.token,
     expiresAt: session.expiresAt.toISOString(),
@@ -72,6 +115,7 @@ export async function customerLogin(req: IncomingMessage, res: ServerResponse) {
 
 export async function customerMe(req: IncomingMessage, res: ServerResponse) {
   if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
+
   const auth = await authorizeCustomer(req);
   json(res, 200, {
     user: publicUser(auth.user),
@@ -81,14 +125,26 @@ export async function customerMe(req: IncomingMessage, res: ServerResponse) {
 
 export async function customerLogout(req: IncomingMessage, res: ServerResponse) {
   if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
+
   const token = customerBearerToken(req.headers.authorization);
   await revokeCustomerSession(token);
   json(res, 200, { ok: true });
 }
 
-export async function customerForgotPassword(req: IncomingMessage, res: ServerResponse) {
+export async function customerForgotPassword(
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
   if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
-  const parsed = z.object({ email: emailSchema }).strict().safeParse(await readJson(req));
+
+  const parsed = z.object({ email: emailSchema }).strict().safeParse(
+    await readJson(req),
+  );
+
   if (!parsed.success) throw new HttpError(400, "Expected valid email");
-  throw new HttpError(501, "Password recovery delivery is not configured yet");
+
+  throw new HttpError(
+    501,
+    "Password recovery delivery is not configured yet",
+  );
 }

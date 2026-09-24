@@ -7,6 +7,7 @@ import { prisma } from "../libs/prisma";
 import { devicePulse } from "./routes/devicePulse";
 import { deviceState } from "./routes/deviceState";
 import { createDeviceResetHandler } from "./routes/deviceReset";
+import { health } from "./routes/health";
 import {
   customerForgotPassword,
   customerLogin,
@@ -22,6 +23,7 @@ import {
   customerUpdateDevice,
 } from "./routes/customerDevices";
 import { createPrismaDeviceResetStore } from "./services/deviceResetService";
+import { getCustomerSessionDurationMs } from "./services/customerAuthService";
 import { authorizeViewer } from "./services/viewerAuthService";
 import { HttpError, json } from "./utils/http";
 
@@ -29,22 +31,35 @@ async function main() {
   const dev = process.env.NODE_ENV !== "production";
   const hostname = process.env.HOST || "0.0.0.0";
   const port = Number(process.env.PORT || 3000);
+
+  getCustomerSessionDurationMs();
+
   const app = next({ dev, hostname, port });
   const handle = app.getRequestHandler();
   await app.prepare();
+
+  await prisma.$connect();
+  await prisma.customerUser.count();
+  logger.info("Database connected");
+  logger.info("Customer authentication ready");
 
   const deviceReset = createDeviceResetHandler(
     createPrismaDeviceResetStore(prisma),
     (event) => {
       const io = getIO();
       io.to("dashboard").emit("deviceReset", event);
-      io.to(`device:${event.deviceId}`).emit("deviceReset", event);
+      io.to("device:" + event.deviceId).emit("deviceReset", event);
     },
   );
 
   const httpServer = createServer(async (req, res) => {
     try {
       const pathname = new URL(req.url || "/", "http://localhost").pathname;
+
+      if (pathname === "/api/v1/health") {
+        await health(req, res);
+        return;
+      }
 
       if (pathname === "/api/v1/auth/register") {
         await customerRegister(req, res);
@@ -125,22 +140,30 @@ async function main() {
         return;
       }
 
-      if (pathname.startsWith("/api/v1/")) throw new HttpError(404, "Endpoint not found");
+      if (pathname.startsWith("/api/v1/")) {
+        throw new HttpError(404, "Endpoint not found");
+      }
+
       if (pathname === "/") authorizeViewer(req, res);
       await handle(req, res);
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;
+
       if (status === 500) {
         logger.error(
           { errorType: error instanceof Error ? error.name : "UnknownError" },
           "Request failed",
         );
       }
+
       if (!res.headersSent) {
         if (status === 413) res.setHeader("Connection", "close");
         json(res, status, {
           ok: false,
-          error: error instanceof HttpError ? error.message : "Internal server error",
+          error:
+            error instanceof HttpError
+              ? error.message
+              : "Internal server error",
         });
       } else {
         res.end();
@@ -150,18 +173,24 @@ async function main() {
 
   httpServer.requestTimeout = 15_000;
   httpServer.headersTimeout = 10_000;
+
   const io = initializeSocket(httpServer);
 
-  httpServer.listen(port, hostname, () => logger.info(`Ready on port ${port}`));
+  httpServer.listen(port, hostname, () => {
+    logger.info("Ready on port " + port);
+  });
+
   httpServer.on("error", () => {
     logger.error("HTTP server failed");
     process.exitCode = 1;
   });
 
   let shuttingDown = false;
+
   const shutdown = () => {
     if (shuttingDown) return;
     shuttingDown = true;
+
     io.close();
     httpServer.close(() => {
       void prisma.$disconnect().then(
@@ -169,6 +198,7 @@ async function main() {
         () => process.exit(1),
       );
     });
+
     setTimeout(() => process.exit(1), 10_000).unref();
   };
 
@@ -176,7 +206,10 @@ async function main() {
   process.on("SIGINT", shutdown);
 }
 
-main().catch(() => {
-  logger.error("Server startup failed");
+main().catch((error) => {
+  logger.error(
+    { errorType: error instanceof Error ? error.name : "UnknownError" },
+    "Server startup failed. Check database connectivity and deployed migrations.",
+  );
   process.exitCode = 1;
 });

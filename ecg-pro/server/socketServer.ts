@@ -1,6 +1,8 @@
 import type { Server as HTTPServer } from "node:http";
 import { Server as SocketIOServer } from "socket.io";
 import { prisma } from "../libs/prisma";
+import logger from "../libs/logger";
+import { scheduleSessionExpiry } from "./utils/sessionExpiry";
 import { authenticateCustomerToken } from "./services/customerAuthService";
 import { authorizeViewer } from "./services/viewerAuthService";
 
@@ -42,24 +44,26 @@ export function initializeSocket(httpServer: HTTPServer) {
   io.on("connection", async (socket) => {
     const expiresAt = Number(socket.data.expiresAt || Date.now());
 
-    if (socket.data.customerUserId) {
-      const rows = await prisma.deviceOwnership.findMany({
-        where: { userId: String(socket.data.customerUserId) },
-        include: { device: true },
-      });
-      for (const row of rows) {
-        socket.join(`device:${row.device.hardwareId}`);
-      }
-    } else {
-      socket.join("dashboard");
-    }
+    const cancelExpiry = scheduleSessionExpiry(expiresAt, () => socket.disconnect(true));
+    socket.once("disconnect", cancelExpiry);
 
-    const timer = setTimeout(
-      () => socket.disconnect(true),
-      Math.max(0, expiresAt - Date.now()),
-    );
-    timer.unref();
-    socket.on("disconnect", () => clearTimeout(timer));
+    try {
+      if (socket.data.customerUserId) {
+        const rows = await prisma.deviceOwnership.findMany({
+          where: { userId: String(socket.data.customerUserId) },
+          include: { device: true },
+        });
+        if (!socket.connected) return;
+        for (const row of rows) {
+          await socket.join(`device:${row.device.hardwareId}`);
+        }
+      } else {
+        await socket.join("dashboard");
+      }
+    } catch {
+      logger.error("Socket room initialization failed");
+      socket.disconnect(true);
+    }
   });
 
   return io;

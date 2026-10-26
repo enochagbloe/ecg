@@ -37,12 +37,17 @@ export function processPulse(store: PulseStore, input: PulseInput, token: string
         heartbeat: true as const,
         deviceId: device.hardwareId,
         meterConstant: device.meterConstant,
+        // Sequence identities are independent of cumulative pulse totals.
+        lastSequence: current.lastSequence === null ? null : Number(current.lastSequence),
         state: serializeState(current, device.meterConstant),
       };
     }
 
     const sequence = BigInt(input.sequence);
     const duplicate = await tx.hasEvent(device.id, sequence);
+    // Supply the original timestamp so firmware can distinguish safe retries
+    // from new optical events accidentally reusing an old sequence number.
+    const existingTime = duplicate ? await tx.getEventTime(device.id, sequence) : null;
     let state = current;
 
     if (!duplicate) {
@@ -58,6 +63,7 @@ export function processPulse(store: PulseStore, input: PulseInput, token: string
       ok: true as const,
       accepted: true as const,
       duplicate,
+      ...(duplicate ? { existingTimestamp: existingTime?.toISOString() ?? null } : {}),
       deviceId: device.hardwareId,
       sequence: input.sequence,
       meterConstant: device.meterConstant,

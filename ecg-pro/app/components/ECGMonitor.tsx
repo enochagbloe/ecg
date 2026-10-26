@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { io } from "socket.io-client";
 
 import { createMeterUpdates, type PulseData } from "./meterUpdates";
+import OpticalDiagnostics from "./OpticalDiagnostics";
 
 export default function ECGMonitor() {
   const [pulseData, setPulseData] = useState<PulseData | null>(null);
@@ -102,6 +103,7 @@ export default function ECGMonitor() {
               <p className="text-gray-600">{loadError || "Waiting for data..."}</p>
             </div>
           )}
+          <OpticalDiagnostics deviceId={process.env.NEXT_PUBLIC_DEVICE_ID || "ECG-001"} />
         </div>
       </div>
     </div>

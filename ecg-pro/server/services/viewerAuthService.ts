@@ -4,6 +4,7 @@ import { hashSecret, secretMatches } from "./deviceAuthService";
 import { HttpError } from "../utils/http";
 
 const cookieName = "ecg_viewer";
+const sessionSeconds = 8 * 60 * 60;
 function credentials() {
   const username = process.env.DASHBOARD_USERNAME;
   const password = process.env.DASHBOARD_PASSWORD;
@@ -14,6 +15,35 @@ function credentials() {
 }
 function signature(expires: string, username: string, password: string) {
   return createHmac("sha256", password).update(`${username}:${expires}`).digest("hex");
+}
+
+function grantSession(res: ServerResponse, username: string, password: string): number {
+  const expiresAt = Date.now() + sessionSeconds * 1000;
+  const expires = String(expiresAt);
+  res.setHeader(
+    "Set-Cookie",
+    `${cookieName}=${expires}.${signature(expires, username, password)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${sessionSeconds}${process.env.NODE_ENV === "production" ? "; Secure" : ""}`,
+  );
+  return expiresAt;
+}
+
+// Dashboard login form reuses the SAME signed HttpOnly session as Basic auth.
+// Never return a session token to browser JavaScript.
+export function loginViewer(username: string, password: string, res: ServerResponse): number {
+  const configured = credentials();
+  const usernameMatches = secretMatches(username, hashSecret(configured.username));
+  const passwordMatches = secretMatches(password, hashSecret(configured.password));
+  if (!usernameMatches || !passwordMatches) {
+    throw new HttpError(401, "Invalid username or password");
+  }
+  return grantSession(res, configured.username, configured.password);
+}
+
+export function logoutViewer(res: ServerResponse): void {
+  res.setHeader(
+    "Set-Cookie",
+    `${cookieName}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${process.env.NODE_ENV === "production" ? "; Secure" : ""}`,
+  );
 }
 
 // Central read-access boundary: replace with user sessions / per-device ACLs later.
@@ -31,11 +61,7 @@ export function authorizeViewer(req: IncomingMessage, res?: ServerResponse): num
     const separator = decoded.indexOf(":");
     if (separator >= 0 && secretMatches(decoded.slice(0, separator), hashSecret(username)) &&
         secretMatches(decoded.slice(separator + 1), hashSecret(password))) {
-      const expires = String(Date.now() + 8 * 60 * 60 * 1000);
-      if (res) {
-        res.setHeader("Set-Cookie", `${cookieName}=${expires}.${signature(expires, username, password)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=28800${process.env.NODE_ENV === "production" ? "; Secure" : ""}`);
-      }
-      return Number(expires);
+      return res ? grantSession(res, username, password) : Date.now() + sessionSeconds * 1000;
     }
   }
   res?.setHeader("WWW-Authenticate", 'Basic realm="ECG Dashboard", charset="UTF-8"');

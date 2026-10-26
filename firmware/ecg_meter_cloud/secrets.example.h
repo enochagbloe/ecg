@@ -1,7 +1,7 @@
 #pragma once
-// Example ONLY. Keep real credentials in your private secrets.h, never on GitHub.
+// Example ONLY. Keep real credentials in private secrets.h. Never commit secrets.
+// Add your own existing private Wi-Fi settings if your sketch uses them.
 #define API_URL "https://ecg-pro.onrender.com/api/v1/device/pulse"
 #define DEVICE_ID "ECG-001"
 #define DEVICE_SECRET "REPLACE_WITH_EXISTING_PRIVATE_DEVICE_TOKEN"
-#define OTA_PASSWORD "REPLACE_WITH_YOUR_STRONG_16PLUS_CHARACTER_OTA_PASSWORD"
-// For production TLS verification, configure ECG_ROOT_CA correctly.
+// Optional: configure ECG_ROOT_CA to verify the Render TLS certificate.

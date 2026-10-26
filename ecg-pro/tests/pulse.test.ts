@@ -99,9 +99,13 @@ test("heartbeat creates no event/state and does not consume a sequence", async (
   assert.equal(store.state, null);
   assert.ok(store.device.lastSeenAt);
   assert.equal(heartbeat.state.totalPulses, 0);
+  assert.equal(heartbeat.lastSequence, null);
   assert.equal(pulseBroadcast(heartbeat), null);
   const pulse = await processPulse(store, input(), token);
   assert.equal(pulse.state.totalPulses, 1);
+  const subsequentHeartbeat = await processPulse(store, input(1, 1000, 0), token);
+  assert.equal(subsequentHeartbeat.lastSequence, 1);
+  assert.equal(subsequentHeartbeat.state.totalPulses, 1);
 });
 
 test("duplicate sequence succeeds, leaves energy unchanged and produces no broadcast", async () => {
@@ -109,6 +113,8 @@ test("duplicate sequence succeeds, leaves energy unchanged and produces no broad
   await processPulse(store, input(), token);
   const duplicate = await processPulse(store, input(1, 9999), token);
   assert.equal("duplicate" in duplicate && duplicate.duplicate, true);
+  assert.equal("existingTimestamp" in duplicate && duplicate.existingTimestamp, input().timestamp);
+  assert.notEqual("existingTimestamp" in duplicate && duplicate.existingTimestamp, input(1, 9999).timestamp);
   assert.equal(duplicate.state.totalPulses, 1);
   assert.equal(duplicate.state.lastPulseAt, input().timestamp);
   assert.equal(store.events.size, 1);

@@ -6,6 +6,7 @@ import logger from "../libs/logger";
 import { prisma } from "../libs/prisma";
 import { devicePulse } from "./routes/devicePulse";
 import { deviceState } from "./routes/deviceState";
+import { receiveOpticalDiagnostic, listOpticalDiagnostics } from "./routes/opticalDiagnostics";
 import { createDeviceResetHandler } from "./routes/deviceReset";
 import { health } from "./routes/health";
 import {
@@ -116,6 +117,25 @@ async function main() {
         }
         res.setHeader("Allow", "PATCH, DELETE");
         throw new HttpError(405, "Method not allowed");
+      }
+
+      if (pathname === "/api/v1/device/diagnostics") {
+        if (req.method !== "POST") {
+          res.setHeader("Allow", "POST");
+          throw new HttpError(405, "Method not allowed");
+        }
+        await receiveOpticalDiagnostic(req, res);
+        return;
+      }
+
+      const diagnosticsMatch = /^\\/api\\/v1\\/devices\\/([A-Za-z0-9_-]+)\\/diagnostics$/.exec(pathname);
+      if (diagnosticsMatch) {
+        if (req.method !== "GET") {
+          res.setHeader("Allow", "GET");
+          throw new HttpError(405, "Method not allowed");
+        }
+        await listOpticalDiagnostics(req, res, diagnosticsMatch[1]);
+        return;
       }
 
       if (pathname === "/api/v1/device/pulse") {

@@ -27,6 +27,7 @@ import {
 import { createPrismaDeviceResetStore } from "./services/deviceResetService";
 import { getCustomerSessionDurationMs } from "./services/customerAuthService";
 import { authorizeViewer } from "./services/viewerAuthService";
+import { dashboardLogin, dashboardLogout } from "./routes/dashboardLogin";
 import { HttpError, json } from "./utils/http";
 
 async function main() {
@@ -60,6 +61,15 @@ async function main() {
 
       if (pathname === "/api/v1/health") {
         await health(req, res);
+        return;
+      }
+
+      if (pathname === "/api/v1/dashboard/login") {
+        await dashboardLogin(req, res);
+        return;
+      }
+      if (pathname === "/api/v1/dashboard/logout") {
+        dashboardLogout(req, res);
         return;
       }
 
@@ -169,7 +179,19 @@ async function main() {
         throw new HttpError(404, "Endpoint not found");
       }
 
-      if (pathname === "/") authorizeViewer(req, res);
+      if (pathname === "/") {
+        try {
+          authorizeViewer(req, res);
+        } catch (error) {
+          // A browser requesting the homepage must see the real sign-in page,
+          // not the machine-readable 401 JSON used by protected API routes.
+          if (!(error instanceof HttpError) || error.status !== 401) throw error;
+          res.removeHeader("WWW-Authenticate");
+          res.writeHead(302, { Location: "/login", "Cache-Control": "no-store" });
+          res.end();
+          return;
+        }
+      }
       await handle(req, res);
     } catch (error) {
       const status = error instanceof HttpError ? error.status : 500;

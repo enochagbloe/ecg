@@ -24,7 +24,6 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
-#include <ArduinoOTA.h>
 #include <WebServer.h>
 #include <Preferences.h>
 #include <LittleFS.h>
@@ -169,7 +168,6 @@ QueueHandle_t opticalPulseQueue = nullptr;
 QueueHandle_t opticalDiagnosticQueue = nullptr;
 // Latest diagnostic window only: bounded RAM queue, safe to drop if Wi-Fi is down.
 QueueHandle_t remoteDiagnosticQueue = nullptr;
-bool otaStarted = false;
 
 QueueHandle_t networkQueue = nullptr;
 SemaphoreHandle_t flashMutex = nullptr;
@@ -220,14 +218,13 @@ void startProvisioningMode();
 void stopProvisioningMode();
 bool extractJsonString(const String& body, const char* key, String& value);
 void configureProvisioningServer();
-void setupLocalOtaIfConnected();
 bool postRemoteOpticalDiagnostic(const TeptDiagnostic& diagnostic);
 
 // ---------- Startup ----------
 void setup() {
   Serial.begin(115200);
   delay(600);
-  Serial.println("\n=== ECG ESP32 TEPT4400 REMOTE-DIAGNOSTICS / LOCAL-OTA BUILD ===");
+  Serial.println("\n=== ECG ESP32 TEPT4400 REMOTE-DIAGNOSTICS BUILD ===");
   Serial.printf("TEPT MODE: %s\n", TEPT_DIAGNOSTIC_ONLY ? "DIAGNOSTIC-ONLY (NO NEW PULSE UPLOADS)" : "LIVE (NEW PULSES TO RENDER)");
   Serial.println("NOTE: NET=Wi-Fi; API=recent successful backend response");
 
@@ -341,9 +338,6 @@ void setup() {
 // ---------- Main loop: persist sensed events, then update screen ----------
 void loop() {
   applyPendingRtcSync();
-  // Password-protected Arduino network upload on the SAME local Wi-Fi.
-  setupLocalOtaIfConnected();
-  if (otaStarted && WiFi.status() == WL_CONNECTED) ArduinoOTA.handle();
   unsigned long nowMs = millis();
 
   // Optical sampling itself is independent of OLED refresh and flash writes.
@@ -1006,41 +1000,6 @@ bool postRemoteOpticalDiagnostic(const TeptDiagnostic& d) {
   Serial.printf("REMOTE TEPT SENT: max=%d detected=%lu short=%lu\n",
                 d.maximum, (unsigned long)d.accepted, (unsigned long)d.shortRejected);
   return true;
-}
-
-// Local-network OTA uploads are deliberately password-gated. An .ino file
-// cannot be pulled/installed from GitHub without a compiled firmware image.
-// Define a strong OTA_PASSWORD in your private secrets.h and flash via USB ONCE.
-void setupLocalOtaIfConnected() {
-#if defined(OTA_PASSWORD)
-  if (otaStarted || WiFi.status() != WL_CONNECTED || provisioningMode) return;
-  if (strlen(OTA_PASSWORD) < 16 || strstr(OTA_PASSWORD, "REPLACE_WITH_") != nullptr) {
-    static bool warned = false;
-    if (!warned) {
-      Serial.println("OTA DISABLED: set a private, non-placeholder OTA_PASSWORD of at least 16 characters");
-      warned = true;
-    }
-    return;
-  }
-  ArduinoOTA.setHostname(DEVICE_ID);
-  ArduinoOTA.setPassword(OTA_PASSWORD);
-  ArduinoOTA.onStart([]() {
-    Serial.println("OTA STARTED: avoid power loss; NVS and LittleFS are retained");
-  });
-  ArduinoOTA.onEnd([]() { Serial.println("OTA COMPLETE: restarting"); });
-  ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("OTA ERROR: %u\n", (unsigned int)error);
-  });
-  ArduinoOTA.begin();
-  otaStarted = true;
-  Serial.printf("LOCAL OTA READY: %s (%s)\n", DEVICE_ID, WiFi.localIP().toString().c_str());
-#else
-  static bool warned = false;
-  if (!warned && WiFi.status() == WL_CONNECTED) {
-    Serial.println("LOCAL OTA DISABLED: define strong OTA_PASSWORD in secrets.h");
-    warned = true;
-  }
-#endif
 }
 
 // ---------- Network worker ----------

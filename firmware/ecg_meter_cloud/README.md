@@ -1,32 +1,33 @@
-# ECG ESP32 remote diagnostics + LAN OTA
+# ECG ESP32 remote optical diagnostics (USB uploads only)
 
-This Arduino sketch targets the **classic ESP32 DevKit**, with a TEPT4400 on GPIO34 (10 kΩ to GND), DS3231 and SH1106 OLED. It preserves the Sequence Guard, LittleFS outbox and NVS pulse counts.
+This Arduino sketch targets the **classic ESP32 DevKit**, with a TEPT4400 phototransistor on GPIO34 (10 kΩ pull-down to GND), DS3231 and SH1106 OLED. It keeps the existing Sequence Guard, LittleFS outbox, NVS pulse totals, Render heartbeat and Wi-Fi connection.
 
-## Initial setup
+**No OTA firmware-update code is included in this version.** Firmware changes are uploaded with USB.
 
-1. Back up your existing sketch, NVS and LittleFS/outbox. Avoid **Erase All Flash** and changing partitions.
-2. Open `firmware/ecg_meter_cloud/ecg_meter_cloud.ino` in Arduino IDE and retain your **existing private `secrets.h`**, beside it.
-3. Add this new value to `secrets.h`:
-   ```cpp
-   #define OTA_PASSWORD "REPLACE_WITH_YOUR_OWN_STRONG_16_PLUS_CHARACTER_SECRET"
-   ```
-   Never commit `secrets.h`, `DEVICE_SECRET`, your Wi-Fi password, or a compiled firmware binary containing secrets.
-4. Choose the same ESP32 board and partition scheme as the working firmware; you need an **OTA-capable partition layout with two application slots**. First upload must be by USB.
-5. Open Serial Monitor (115200) and verify `SEQ GUARD`, `REMOTE TEPT SENT`, and `LOCAL OTA READY` output.
-6. Remote optical statistics appear on the existing ECG dashboard **only after** the new backend commits have been deployed to Render.
+## Installation
 
-## Diagnostics
+1. Back up your existing `ecg_meter_cloud.ino` and preserve your local NVS and LittleFS pulse records. Do **not** select *Erase All Flash* or change your partition scheme.
+2. Copy `firmware/ecg_meter_cloud/ecg_meter_cloud.ino` into your existing Arduino sketch folder.
+3. Leave your **private `secrets.h`** beside the .ino file, containing your existing `API_URL`, `DEVICE_ID`, and working `DEVICE_SECRET`. Do not commit `secrets.h` to public GitHub. No `OTA_PASSWORD` is required.
+4. Upload once by USB using the same Arduino board configuration as the working prototype.
+5. Open Serial Monitor at 115200 baud. Look for `SEQ GUARD` and `REMOTE TEPT SENT`, or `REMOTE TEPT POST FAILED: HTTP ...`.
 
-When `TEPT_DIAGNOSTIC_ONLY = true`, accepted optical flashes are **not** written to the pulse history or cloud meter totals. The firmware sends 5-second snapshots of ADC minimum/maximum, ambient baseline, threshold deltas, candidates, accepted, short/long rejected, and saturation to `POST /api/v1/device/diagnostics` with device-token authentication. Backend broadcasts `opticalDiagnostic` and retains **60 snapshots in memory per device** (lost on redeploy). The diagnostics endpoint is independent of the consumption endpoint.
+## Remote diagnostics
 
-For on-meter testing, monitor the dashboard while the sensor is held stationary in an **opaque optical shroud** over the LED. If `maximum = 0` despite clearly visible LED pulses, verify polarity, supply, ADC voltage and alignment. If candidates increase but accepted does not, analyze rejection counters, pulse width and optical filtering. Avoid enabling LIVE consumption counting until validated.
+By default, `TEPT_DIAGNOSTIC_ONLY = true`: optical test flashes **do not** create cloud consumption events or increase the saved local pulse total.
 
-## Wireless firmware uploads
+Every ~5 seconds, a diagnostic summary is posted over Wi-Fi to `POST /api/v1/device/diagnostics` with the device's existing bearer-token authentication. The backend separately broadcasts `opticalDiagnostic` to authenticated dashboard viewers, and shows a history of up to **60 reports per device**. This history is kept in server memory and will reset on Render restart/redeploy; the meter's PostgreSQL pulse history remains unaffected.
 
-**Local Wi-Fi OTA is enabled** only if `OTA_PASSWORD` is defined and has at least 16 characters. When the ESP32 is powered and connected to the **same trusted local Wi-Fi** as your computer, Arduino IDE may discover it under **Tools → Port → Network Port**. Select the network port and upload a compiled sketch. If mDNS doesn't discover it, check local IP, firewall, Arduino ESP32 core, and OTA partitions. OTA can interrupt sensor sampling, so use stable power and a quiet test window. Keep backup and recovery access.
+To view the logs on a phone or computer, open the existing ECG dashboard. The **Optical sensor diagnostics** section displays ADC range, ambient baseline, threshold, candidates, accepted, short/long rejected and recent reports. The backend changes must be deployed to Render before the ESP32 can upload diagnostics.
 
-### Not yet GitHub-to-device OTA
+For safe testing, use the TEPT4400 in its opaque non-invasive optical shroud over the meter LED with permission, and compare visible meter blinks against reports. If `maximum=0`, check sensor power, polarity, ADC pin and alignment; if `maximum` rises but `detected=0`, investigate thresholds and rejected pulse-duration statistics. The sensor cannot identify the light source by itself.
 
-GitHub stores source files, not deployable firmware. This version **does not auto-download** files from GitHub or Render, and it intentionally does not expose an unsafe unauthenticated browser flashing endpoint. Fully remote OTA requires reproducible binary builds, device-managed secrets (not embedded in a public binary), authenticated firmware manifest, verified image/hash/signature, compatible partitions, recovery/rollback and staged rollout.
+The remote endpoint is best-effort: it prioritizes electricity pulse outbox delivery over diagnostic messages, discards stale diagnostic windows if Wi-Fi is down, and never increments pulse totals.
 
-This source has **not** been compiled or validated on the physical ESP32 hardware in this environment. Test via Arduino IDE first.
+## What this version does NOT provide
+
+- Wi-Fi or GitHub-to-ESP32 firmware updating (OTA).
+- Guaranteed capture of asynchronous 1 ms meter flashes; full meter-side validation is pending.
+- Production-grade TLS verification without a trusted `ECG_ROOT_CA` configured in `secrets.h`. The prototype uses `setInsecure()` otherwise.
+
+**Build status:** Source has not been compiled or hardware-tested in this environment. Validate with Arduino IDE before relying on it for meter measurements.

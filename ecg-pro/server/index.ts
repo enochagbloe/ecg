@@ -128,7 +128,7 @@ async function main() {
         return;
       }
 
-      const diagnosticsMatch = /^\\/api\\/v1\\/devices\\/([A-Za-z0-9_-]+)\\/diagnostics$/.exec(pathname);
+      const diagnosticsMatch = /^\/api\/v1\/devices\/([A-Za-z0-9_-]+)\/diagnostics$/.exec(pathname);
       if (diagnosticsMatch) {
         if (req.method !== "GET") {
           res.setHeader("Allow", "GET");

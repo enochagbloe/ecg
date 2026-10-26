@@ -1014,10 +1014,10 @@ bool postRemoteOpticalDiagnostic(const TeptDiagnostic& d) {
 void setupLocalOtaIfConnected() {
 #if defined(OTA_PASSWORD)
   if (otaStarted || WiFi.status() != WL_CONNECTED || provisioningMode) return;
-  if (strlen(OTA_PASSWORD) < 16) {
+  if (strlen(OTA_PASSWORD) < 16 || strstr(OTA_PASSWORD, "REPLACE_WITH_") != nullptr) {
     static bool warned = false;
     if (!warned) {
-      Serial.println("OTA DISABLED: OTA_PASSWORD must be at least 16 characters");
+      Serial.println("OTA DISABLED: set a private, non-placeholder OTA_PASSWORD of at least 16 characters");
       warned = true;
     }
     return;

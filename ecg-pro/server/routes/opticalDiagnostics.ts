@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { prisma } from "../../libs/prisma";
+import logger from "../../libs/logger";
 import { bearerToken, authenticateDevice } from "../services/deviceAuthService";
 import { opticalDiagnosticSchema, appendOpticalDiagnostic, recentOpticalDiagnostics } from "../services/opticalDiagnosticService";
 import { authorizeViewer } from "../services/viewerAuthService";
@@ -17,6 +18,28 @@ export async function receiveOpticalDiagnostic(req: IncomingMessage, res: Server
 
   const entry = appendOpticalDiagnostic(parsed.data);
   if (entry) {
+    // Prototype bench testing: write a bounded, safe telemetry summary so
+    // readings can be inspected remotely in Render Logs without browser access.
+    // Never log the Authorization header, device token, or Wi-Fi credentials.
+    logger.info({
+      deviceId: entry.deviceId,
+      receivedAt: entry.receivedAt,
+      diagnosticOnly: entry.diagnosticOnly,
+      adcMin: entry.minimum,
+      adcMax: entry.maximum,
+      baseline: entry.baseline,
+      peakDelta: entry.peakDelta,
+      onDelta: entry.onDelta,
+      offDelta: entry.offDelta,
+      samples: entry.samples,
+      candidates: entry.candidates,
+      detected: entry.detected,
+      shortRejected: entry.shortRejected,
+      longRejected: entry.longRejected,
+      saturatedSamples: entry.saturatedSamples,
+      queueDrops: entry.queueDrops,
+      armed: entry.armed,
+    }, "TEPT4400 optical diagnostic received");
     const io = getIO();
     io.to("dashboard").emit("opticalDiagnostic", entry);
     io.to(`device:${deviceId}`).emit("opticalDiagnostic", entry);

@@ -24,6 +24,23 @@ test("remote optical diagnostics validates bounded telemetry only", () => {
   assert.equal(opticalDiagnosticSchema.safeParse({ ...make("ECG-test"), samples: -1 }).success, false);
 });
 
+test("pulse duration statistics are accepted while older firmware payloads remain valid", () => {
+  const older = make("ECG-test-widths");
+  assert.equal(opticalDiagnosticSchema.safeParse(older).success, true);
+  const measured = {
+    ...older,
+    widthSamples: 4,
+    minWidthUs: 26,
+    maxWidthUs: 190,
+    averageWidthUs: 81,
+    lastWidthUs: 43,
+    maxShortWidthUs: 92,
+  };
+  assert.equal(opticalDiagnosticSchema.safeParse(measured).success, true);
+  assert.equal(opticalDiagnosticSchema.safeParse({ ...measured, maxWidthUs: -1 }).success, false);
+  assert.equal(opticalDiagnosticSchema.safeParse({ ...measured, lastWidthUs: "43" }).success, false);
+});
+
 test("diagnostic history is rate limited and bounded, independently per device", () => {
   const deviceId = "ECG-test-diagnostics-unique";
   const other = "ECG-test-diagnostics-other";

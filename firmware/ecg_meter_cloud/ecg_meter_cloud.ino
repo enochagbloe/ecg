@@ -41,16 +41,13 @@ constexpr int TEPT_PIN = 34;  // ADC1 works while Wi-Fi is connected.
 // When false, confirmed pulses enter the existing persistent outbox and Render.
 constexpr bool TEPT_DIAGNOSTIC_ONLY = true;
 
-// WEAK-LIGHT DIAGNOSTIC CALIBRATION: testing against a separate Arduino LED.
-// Live ECG meter counting MUST remain disabled until on/off false-positive
-// tests and known flash-count comparison confirm reliable discrimination.
-// In the previous setup, intermittent ADC peaks of ~18-21 were below 30.
-// These smaller thresholds allow candidate capture, but only validated
-// rising/falling edges with sufficient duration can become accepted flashes.
-constexpr int TEPT_MIN_FLASH_DELTA_ADC = 12;
-constexpr int TEPT_MIN_RELEASE_DELTA_ADC = 4;
-constexpr float TEPT_NOISE_MULTIPLIER = 5.0f;
-constexpr float TEPT_NOISE_OFFSET = 5.0f;
+// Verified dark-condition thresholds from standalone 20-flash breadboard test.
+// Fixed 10/5 ADC DELTAS (above calibrated ambient), not adaptive noise targets.
+// Keep diagnostic-only mode until 20/20 flashes AND dark false-positive test pass.
+constexpr int TEPT_MIN_FLASH_DELTA_ADC = 10;
+constexpr int TEPT_MIN_RELEASE_DELTA_ADC = 5;
+constexpr float TEPT_NOISE_MULTIPLIER = 0.0f; // Prevent auto-raising 10
+constexpr float TEPT_NOISE_OFFSET = 0.0f;     // Prevent auto-raising 10
 constexpr float TEPT_BASELINE_ALPHA = 0.0006f; // Slow ambient tracking when OFF
 constexpr float TEPT_NOISE_ALPHA = 0.001f;
 constexpr unsigned long TEPT_CALIBRATION_MS = 1500;
@@ -59,11 +56,13 @@ constexpr unsigned long TEPT_DIAGNOSTIC_MS = 5000;
 // Lightweight local view; Wi-Fi telemetry remains one report per 5 seconds.
 constexpr unsigned long TEPT_LIVE_WINDOW_MS = 250;
 
-// Validate complete flash with microsecond timing, rather than requiring 2 ms ON.
-constexpr uint32_t TEPT_MIN_FLASH_US = 180;     // Reject single-sample spikes
-constexpr uint32_t TEPT_MAX_FLASH_US = 300000;  // Reject sustained light (300 ms)
-constexpr uint32_t TEPT_RELEASE_STABLE_US = 250;
-constexpr uint32_t TEPT_REARM_US = 2000;
+// Bench LED = 20 ms ON / 800 ms OFF. Require a sustained 4 ms optical
+// signal as in the successful standalone test, rather than counting spikes.
+// These timings are diagnostic values; measure REAL meter LED widths before live mode.
+constexpr uint32_t TEPT_MIN_FLASH_US = 4000;    // 4 ms sustained illumination
+constexpr uint32_t TEPT_MAX_FLASH_US = 300000;  // Ignore constant light >300 ms
+constexpr uint32_t TEPT_RELEASE_STABLE_US = 1200; // Ignore short OFF glitches
+constexpr uint32_t TEPT_REARM_US = 10000;       // 10 ms stable darkness
 constexpr unsigned long MIN_PULSE_INTERVAL_MS = 100;
 // Give the normal Arduino loop some CPU time, without an explicit 1 ms
 // sleep after EVERY ADC reading (which would miss 1 ms optical flashes).
@@ -615,12 +614,22 @@ void opticalSamplingTask(void* parameter) {
   while (true) {
     const uint32_t nowUs = micros();
     const uint32_t nowMs = millis();
-    const int adc = analogRead(TEPT_PIN);
-    ++samples;
-    if (adc < minAdc) minAdc = adc;
-    if (adc > maxAdc) maxAdc = adc;
-    if (adc > livePeak250) livePeak250 = adc;
-    if (adc >= 4090) ++saturatedSamples;
+    // Filter the INPUT, not just the event counter. The previous raw ADC
+    // produced spurious 10+ readings which looked like ultra-short flashes.
+    // Eight samples averaged here match the standalone ESP32 detector.
+    // Retain raw extrema for remote troubleshooting of wiring/light alignment.
+    int filteredSum = 0;
+    int latestRawAdc = 0;
+    for (int i = 0; i < 8; ++i) {
+      latestRawAdc = analogRead(TEPT_PIN);
+      filteredSum += latestRawAdc;
+      ++samples;
+      if (latestRawAdc < minAdc) minAdc = latestRawAdc;
+      if (latestRawAdc > maxAdc) maxAdc = latestRawAdc;
+      if (latestRawAdc > livePeak250) livePeak250 = latestRawAdc;
+      if (latestRawAdc >= 4090) ++saturatedSamples;
+    }
+    const int adc = filteredSum / 8;
 
     if ((uint32_t)(nowMs - startMs) < TEPT_CALIBRATION_MS) {
       // No meter events during the initial ambient-light calibration.

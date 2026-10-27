@@ -39,7 +39,7 @@
 constexpr int TEPT_PIN = 34;  // ADC1 works while Wi-Fi is connected.
 // Default SAFETY MODE. Leave true while checking optical response on prototype.
 // When false, confirmed pulses enter the existing persistent outbox and Render.
-constexpr bool TEPT_DIAGNOSTIC_ONLY = true;
+constexpr bool TEPT_DIAGNOSTIC_ONLY = false; // Live test: validated flashes increment ECG-001 totals
 
 // Verified dark-condition thresholds from standalone 20-flash breadboard test.
 // Fixed 10/5 ADC DELTAS (above calibrated ambient), not adaptive noise targets.

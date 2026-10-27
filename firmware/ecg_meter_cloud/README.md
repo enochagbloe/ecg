@@ -24,6 +24,15 @@ For safe testing, use the TEPT4400 in its opaque non-invasive optical shroud ove
 
 The remote endpoint is best-effort: it prioritizes electricity pulse outbox delivery over diagnostic messages, discards stale diagnostic windows if Wi-Fi is down, and never increments pulse totals.
 
+## 20 ms controlled flash test
+
+1. First deploy the matching latest ECG backend to Render. The old backend uses strict JSON validation and will reject the six new optional width fields until updated.
+2. Use the independent LED-generator sketch in `firmware/arduino_flash_generator/arduino_flash_generator.ino` on a **separate Arduino Uno** (D9 LED pin) or **separate ESP32** (GPIO25 LED pin). Use a 220 Ω LED series resistor.
+3. Power the ECG ESP32 from USB with its original private `secrets.h`, ensure `TEPT_DIAGNOSTIC_ONLY = true`, and upload this updated ECG sketch without erasing NVS/LittleFS.
+4. Arduino test sends precisely **20 flashes, each 20 ms ON / 800 ms OFF**, after a 5-second LED-OFF baseline. Arduino sends them only once per reset.
+5. Compare the ECG dashboard's 5-second sums against the Arduino's 20 generated flashes. Check `widthSamples`, `minWidthUs`, `maxWidthUs`, `averageWidthUs`, `lastWidthUs`, and `maxShortWidthUs`. Values are durations measured **above the adaptive optical threshold**, not necessarily the Arduino's exact LED ON time.
+6. If `widthSamples` is zero despite visible light, inspect the sensor orientation and wiring. If most measured widths are under **180 µs**, suspect a transient optical/electrical signal, not merely a threshold difference. Keep diagnostic-only mode until repeatable counts are verified.
+
 ## What this version does NOT provide
 
 - Wi-Fi or GitHub-to-ESP32 firmware updating (OTA).

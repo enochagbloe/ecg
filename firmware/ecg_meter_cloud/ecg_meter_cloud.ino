@@ -489,7 +489,8 @@ void renderDisplay(DateTime now) {
     display.print(" CAND:"); display.print(teptLastReport.candidates);
 
     display.setCursor(0, 59);
-    display.print("SHORT:"); display.print(teptLastReport.shortRejected);
+    display.print("W:"); display.print(teptLastReport.maxWidthUs);
+    display.print("us S:"); display.print(teptLastReport.shortRejected);
     if (!teptLiveReady) display.print(" INIT");
     display.sendBuffer();
     return;

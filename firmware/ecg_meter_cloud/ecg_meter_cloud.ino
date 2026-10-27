@@ -41,9 +41,9 @@ constexpr int TEPT_PIN = 34;  // ADC1 works while Wi-Fi is connected.
 // When false, confirmed pulses enter the existing persistent outbox and Render.
 constexpr bool TEPT_DIAGNOSTIC_ONLY = false; // Live test: validated flashes increment ECG-001 totals
 
-// Verified dark-condition thresholds from standalone 20-flash breadboard test.
-// Fixed 10/5 ADC DELTAS (above calibrated ambient), not adaptive noise targets.
-// Keep diagnostic-only mode until 20/20 flashes AND dark false-positive test pass.
+// Working 10/5 threshold values from the standalone 20-blink test.
+// Fixed ADC DELTAS above ambient: do not raise them automatically.
+// During live bench tests, artificial flashes are recorded as consumption.
 constexpr int TEPT_MIN_FLASH_DELTA_ADC = 10;
 constexpr int TEPT_MIN_RELEASE_DELTA_ADC = 5;
 constexpr float TEPT_NOISE_MULTIPLIER = 0.0f; // Prevent auto-raising 10
@@ -56,13 +56,16 @@ constexpr unsigned long TEPT_DIAGNOSTIC_MS = 5000;
 // Lightweight local view; Wi-Fi telemetry remains one report per 5 seconds.
 constexpr unsigned long TEPT_LIVE_WINDOW_MS = 250;
 
-// Bench LED = 20 ms ON / 800 ms OFF. Require a sustained 4 ms optical
-// signal as in the successful standalone test, rather than counting spikes.
-// These timings are diagnostic values; measure REAL meter LED widths before live mode.
-constexpr uint32_t TEPT_MIN_FLASH_US = 4000;    // 4 ms sustained illumination
-constexpr uint32_t TEPT_MAX_FLASH_US = 300000;  // Ignore constant light >300 ms
-constexpr uint32_t TEPT_RELEASE_STABLE_US = 1200; // Ignore short OFF glitches
-constexpr uint32_t TEPT_REARM_US = 10000;       // 10 ms stable darkness
+// Meter flash WIDTH is not the changing interval BETWEEN flashes.
+// Accept complete light transitions down to ~0.15ms, including 1ms flashes.
+// A single ESP32 ADC spike observed in Render lasted ~40-53us; it should not count.
+// Count one completed ON->OFF cycle, then re-arm in darkness before the next.
+// Minimum spacing 100ms still permits five flashes per second (200ms apart).
+// Verify on the real meter before treating this as billing-grade metrology.
+constexpr uint32_t TEPT_MIN_FLASH_US = 150;     // Reject isolated ADC spikes, allow 1ms LEDs
+constexpr uint32_t TEPT_MAX_FLASH_US = 300000;  // Reject stuck HIGH >300ms
+constexpr uint32_t TEPT_RELEASE_STABLE_US = 250; // Confirm OFF without 1.2ms added delay
+constexpr uint32_t TEPT_REARM_US = 2000;       // Require 2ms stable darkness
 constexpr unsigned long MIN_PULSE_INTERVAL_MS = 100;
 // Give the normal Arduino loop some CPU time, without an explicit 1 ms
 // sleep after EVERY ADC reading (which would miss 1 ms optical flashes).
@@ -347,7 +350,11 @@ void setup() {
   // Pulse handling and flash writes remain in loopTask, never this task.
   pinMode(TEPT_PIN, INPUT);
   analogReadResolution(12);
-  analogSetPinAttenuation(TEPT_PIN, ADC_11db);
+  // TEPT4400 is a weak-light, low-voltage ADC source. The original 11dB
+  // setting targets a broad ~0.15-3.1V range on original ESP32.
+  // 0dB increases sensitivity in the lower ~0.10-0.95V region. Confirm
+  // raw ON/OFF levels experimentally; the hardware ADC has a low-voltage floor.
+  analogSetPinAttenuation(TEPT_PIN, ADC_0db);
   if (opticalPulseQueue && opticalDiagnosticQueue) {
     if (xTaskCreatePinnedToCore(opticalSamplingTask, "opticalADC", 4096,
                                 nullptr, 2, nullptr, 1) != pdPASS) {

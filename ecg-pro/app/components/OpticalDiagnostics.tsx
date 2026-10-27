@@ -17,6 +17,12 @@ interface OpticalLog {
   candidates: number;
   detected: number;
   shortRejected: number;
+  widthSamples?: number;
+  minWidthUs?: number;
+  maxWidthUs?: number;
+  averageWidthUs?: number;
+  lastWidthUs?: number;
+  maxShortWidthUs?: number;
   longRejected: number;
   saturatedSamples: number;
   queueDrops: number;
@@ -106,11 +112,29 @@ export default function OpticalDiagnostics({ deviceId }: { deviceId: string }) {
               </div>
             ))}
           </div>
+          <h3 className="mt-6 mb-2 text-sm font-semibold">Measured pulse durations (microseconds)</h3>
+          {latest.widthSamples === undefined ? (
+            <p className="mb-3 text-sm text-slate-500">Upload the pulse-width diagnostic firmware to see durations.</p>
+          ) : (
+            <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {[
+                ["Last waveform", latest.widthSamples ? latest.lastWidthUs : "—"],
+                ["Average waveform", latest.widthSamples ? latest.averageWidthUs : "—"],
+                ["Shortest / longest", latest.widthSamples ? `${latest.minWidthUs}–${latest.maxWidthUs}` : "—"],
+                ["Longest rejected short", latest.shortRejected ? latest.maxShortWidthUs : "—"],
+              ].map(([name, value]) => (
+                <div key={name} className="rounded-lg border border-slate-200 bg-white p-3">
+                  <p className="text-xs text-slate-500">{name} (µs)</p>
+                  <p className="mt-1 text-xl font-semibold">{value}</p>
+                </div>
+              ))}
+            </div>
+          )}
           <h3 className="mt-6 mb-2 text-sm font-semibold">Recent 5-second reports</h3>
           <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
             <table className="min-w-full text-left text-xs">
               <thead className="bg-slate-100">
-                <tr>{["Received", "ADC range", "Baseline", "Candidates", "Detected", "Short", "Long"].map((h) => <th key={h} className="px-3 py-2">{h}</th>)}</tr>
+                <tr>{["Received", "ADC range", "Baseline", "Candidates", "Detected", "Short", "Width µs", "Long"].map((h) => <th key={h} className="px-3 py-2">{h}</th>)}</tr>
               </thead>
               <tbody>
                 {window.map((row) => (
@@ -121,6 +145,7 @@ export default function OpticalDiagnostics({ deviceId }: { deviceId: string }) {
                     <td className="px-3 py-2">{row.candidates}</td>
                     <td className="px-3 py-2 font-semibold">{row.detected}</td>
                     <td className="px-3 py-2">{row.shortRejected}</td>
+                    <td className="px-3 py-2">{row.widthSamples === undefined ? "—" : row.widthSamples ? `${row.minWidthUs}–${row.maxWidthUs}` : "none"}</td>
                     <td className="px-3 py-2">{row.longRejected}</td>
                   </tr>
                 ))}

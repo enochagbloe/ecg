@@ -614,22 +614,17 @@ void opticalSamplingTask(void* parameter) {
   while (true) {
     const uint32_t nowUs = micros();
     const uint32_t nowMs = millis();
-    // Filter the INPUT, not just the event counter. The previous raw ADC
-    // produced spurious 10+ readings which looked like ultra-short flashes.
-    // Eight samples averaged here match the standalone ESP32 detector.
-    // Retain raw extrema for remote troubleshooting of wiring/light alignment.
-    int filteredSum = 0;
-    int latestRawAdc = 0;
-    for (int i = 0; i < 8; ++i) {
-      latestRawAdc = analogRead(TEPT_PIN);
-      filteredSum += latestRawAdc;
-      ++samples;
-      if (latestRawAdc < minAdc) minAdc = latestRawAdc;
-      if (latestRawAdc > maxAdc) maxAdc = latestRawAdc;
-      if (latestRawAdc > livePeak250) livePeak250 = latestRawAdc;
-      if (latestRawAdc >= 4090) ++saturatedSamples;
-    }
-    const int adc = filteredSum / 8;
+    // Use the full sensor signal. Bench diagnostics showed averaging
+    // eight ADC readings reduced a real raw peak of 76 to only 9, below
+    // the FIXED 10-unit trigger. Never average away brief meter LED flashes.
+    // Single-sample spikes are excluded later: a pulse must sustain a
+    // valid HIGH duration, transition LOW, and pass minimum pulse spacing.
+    const int adc = analogRead(TEPT_PIN);
+    ++samples;
+    if (adc < minAdc) minAdc = adc;
+    if (adc > maxAdc) maxAdc = adc;
+    if (adc > livePeak250) livePeak250 = adc;
+    if (adc >= 4090) ++saturatedSamples;
 
     if ((uint32_t)(nowMs - startMs) < TEPT_CALIBRATION_MS) {
       // No meter events during the initial ambient-light calibration.

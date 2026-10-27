@@ -165,6 +165,9 @@ struct TeptDiagnostic {
   uint32_t shortRejected;
   uint32_t longRejected;
   uint32_t saturatedSamples;
+  // Measured high interval: rising trigger crossing to the first falling crossing.
+  uint32_t widthSamples, minWidthUs, maxWidthUs, averageWidthUs;
+  uint32_t lastWidthUs, maxShortWidthUs;
 };
 // A 250 ms ADC snapshot sent from the sampling task to the main loop.
 // ADC work stays on its dedicated task: OLED/Serial never interrupt its fast loop.
@@ -398,13 +401,17 @@ void loop() {
       "TEPT 5s: min=%d max=%d baseline=%d peakDelta=%d "
       "ONdelta=%d OFFdelta=%d armed=%s samples=%lu "
       "candidates=%lu detected=%lu dropped=%lu "
-      "short=%lu long=%lu saturated=%lu\n",
+      "short=%lu long=%lu saturated=%lu widths=%lu "
+      "minUs=%lu maxUs=%lu avgUs=%lu lastUs=%lu maxShortUs=%lu\n",
       diag.minimum, diag.maximum, diag.baseline, diag.peakDelta,
       diag.onDelta, diag.offDelta, diag.armed ? "YES" : "NO",
       (unsigned long)diag.samples, (unsigned long)diag.candidates,
       (unsigned long)diag.accepted, (unsigned long)diag.queueDrops,
       (unsigned long)diag.shortRejected, (unsigned long)diag.longRejected,
-      (unsigned long)diag.saturatedSamples);
+      (unsigned long)diag.saturatedSamples, (unsigned long)diag.widthSamples,
+      (unsigned long)diag.minWidthUs, (unsigned long)diag.maxWidthUs,
+      (unsigned long)diag.averageWidthUs, (unsigned long)diag.lastWidthUs,
+      (unsigned long)diag.maxShortWidthUs);
   }
 
   if (nowMs - lastDisplayRefresh >= OLED_REFRESH_MS) {
@@ -596,6 +603,9 @@ void opticalSamplingTask(void* parameter) {
   int candidatePeak = 0;
   uint32_t samples = 0, candidates = 0, accepted = 0, drops = 0;
   uint32_t shortRejected = 0, longRejected = 0, saturatedSamples = 0;
+  uint32_t widthSamples = 0, minWidthUs = UINT32_MAX, maxWidthUs = 0;
+  uint32_t lastWidthUs = 0, maxShortWidthUs = 0;
+  uint64_t widthTotalUs = 0;
 
   while (true) {
     const uint32_t nowUs = micros();
@@ -630,6 +640,12 @@ void opticalSamplingTask(void* parameter) {
             // Measure the HIGH interval at the beginning of the confirmed
             // falling edge; don't count the trailing stable-LOW delay.
             const uint32_t widthUs = (uint32_t)(releaseStartUs - pulseStartUs);
+            // Include every completed candidate, including very short ones.
+            ++widthSamples;
+            widthTotalUs += (uint64_t)widthUs;
+            if (widthUs < minWidthUs) minWidthUs = widthUs;
+            if (widthUs > maxWidthUs) maxWidthUs = widthUs;
+            lastWidthUs = widthUs;
             pulseHigh = false;
             releaseCandidate = false;
             armed = false;
@@ -647,6 +663,7 @@ void opticalSamplingTask(void* parameter) {
               else ++drops;
             } else if (widthUs < TEPT_MIN_FLASH_US) {
               ++shortRejected;
+              if (widthUs > maxShortWidthUs) maxShortWidthUs = widthUs;
             }
           }
         } else {
@@ -726,10 +743,18 @@ void opticalSamplingTask(void* parameter) {
       diag.shortRejected = shortRejected;
       diag.longRejected = longRejected;
       diag.saturatedSamples = saturatedSamples;
+      diag.widthSamples = widthSamples;
+      diag.minWidthUs = widthSamples ? minWidthUs : 0;
+      diag.maxWidthUs = maxWidthUs;
+      diag.averageWidthUs = widthSamples ? (uint32_t)(widthTotalUs / widthSamples) : 0;
+      diag.lastWidthUs = lastWidthUs;
+      diag.maxShortWidthUs = maxShortWidthUs;
       if (opticalDiagnosticQueue) xQueueOverwrite(opticalDiagnosticQueue, &diag);
       minAdc = 4095; maxAdc = 0; peakDelta = 0;
       samples = candidates = accepted = drops = 0;
       shortRejected = longRejected = saturatedSamples = 0;
+      widthSamples = 0; minWidthUs = UINT32_MAX; maxWidthUs = 0;
+      lastWidthUs = 0; maxShortWidthUs = 0; widthTotalUs = 0;
       lastReportMs = nowMs;
     }
 
@@ -1040,20 +1065,25 @@ bool postRemoteOpticalDiagnostic(const TeptDiagnostic& d) {
   if (!endpoint.startsWith("https://") || slash < 0) return false;
   endpoint = endpoint.substring(0, slash) + "/diagnostics";
 
-  char body[700];
+  char body[1000];
   const int n = snprintf(body, sizeof(body),
     "{\"deviceId\":\"%s\",\"diagnosticOnly\":%s,"
     "\"minimum\":%d,\"maximum\":%d,\"baseline\":%d,"
     "\"peakDelta\":%d,\"onDelta\":%d,\"offDelta\":%d,"
     "\"samples\":%lu,\"candidates\":%lu,\"detected\":%lu,"
     "\"shortRejected\":%lu,\"longRejected\":%lu,"
-    "\"saturatedSamples\":%lu,\"queueDrops\":%lu,\"armed\":%s}",
+    "\"saturatedSamples\":%lu,\"queueDrops\":%lu,\"armed\":%s,"
+    "\"widthSamples\":%lu,\"minWidthUs\":%lu,\"maxWidthUs\":%lu,"
+    "\"averageWidthUs\":%lu,\"lastWidthUs\":%lu,\"maxShortWidthUs\":%lu}",
     DEVICE_ID, TEPT_DIAGNOSTIC_ONLY ? "true" : "false",
     d.minimum, d.maximum, d.baseline, d.peakDelta, d.onDelta, d.offDelta,
     (unsigned long)d.samples, (unsigned long)d.candidates,
     (unsigned long)d.accepted, (unsigned long)d.shortRejected,
     (unsigned long)d.longRejected, (unsigned long)d.saturatedSamples,
-    (unsigned long)d.queueDrops, d.armed ? "true" : "false");
+    (unsigned long)d.queueDrops, d.armed ? "true" : "false",
+    (unsigned long)d.widthSamples, (unsigned long)d.minWidthUs,
+    (unsigned long)d.maxWidthUs, (unsigned long)d.averageWidthUs,
+    (unsigned long)d.lastWidthUs, (unsigned long)d.maxShortWidthUs);
   if (n < 0 || n >= (int)sizeof(body)) return false;
   WiFiClientSecure client;
 #ifdef ECG_ROOT_CA
@@ -1073,8 +1103,10 @@ bool postRemoteOpticalDiagnostic(const TeptDiagnostic& d) {
     Serial.printf("REMOTE TEPT POST FAILED: HTTP %d (latest window dropped)\n", code);
     return false;
   }
-  Serial.printf("REMOTE TEPT SENT: max=%d detected=%lu short=%lu\n",
-                d.maximum, (unsigned long)d.accepted, (unsigned long)d.shortRejected);
+  Serial.printf("REMOTE TEPT SENT: max=%d detected=%lu short=%lu widthUs=%lu..%lu avgUs=%lu\n",
+                d.maximum, (unsigned long)d.accepted, (unsigned long)d.shortRejected,
+                (unsigned long)d.minWidthUs, (unsigned long)d.maxWidthUs,
+                (unsigned long)d.averageWidthUs);
   return true;
 }
 

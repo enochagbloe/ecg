@@ -13,6 +13,13 @@ export const opticalDiagnosticSchema = z.object({
   candidates: z.number().int().nonnegative().max(10000000),
   detected: z.number().int().nonnegative().max(10000000),
   shortRejected: z.number().int().nonnegative().max(10000000),
+  // Optional for backward compatibility with previously flashed ESP32 firmware.
+  widthSamples: z.number().int().nonnegative().max(10000000).optional(),
+  minWidthUs: z.number().int().nonnegative().max(10000000).optional(),
+  maxWidthUs: z.number().int().nonnegative().max(10000000).optional(),
+  averageWidthUs: z.number().int().nonnegative().max(10000000).optional(),
+  lastWidthUs: z.number().int().nonnegative().max(10000000).optional(),
+  maxShortWidthUs: z.number().int().nonnegative().max(10000000).optional(),
   longRejected: z.number().int().nonnegative().max(10000000),
   saturatedSamples: z.number().int().nonnegative().max(10000000),
   queueDrops: z.number().int().nonnegative().max(10000000),

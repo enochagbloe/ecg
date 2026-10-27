@@ -52,6 +52,8 @@ constexpr float TEPT_NOISE_ALPHA = 0.001f;
 constexpr unsigned long TEPT_CALIBRATION_MS = 1500;
 constexpr unsigned long TEPT_RECENTER_MS = 450;
 constexpr unsigned long TEPT_DIAGNOSTIC_MS = 5000;
+// Lightweight local view; Wi-Fi telemetry remains one report per 5 seconds.
+constexpr unsigned long TEPT_LIVE_WINDOW_MS = 250;
 
 // Validate complete flash with microsecond timing, rather than requiring 2 ms ON.
 constexpr uint32_t TEPT_MIN_FLASH_US = 180;     // Reject single-sample spikes
@@ -164,10 +166,22 @@ struct TeptDiagnostic {
   uint32_t longRejected;
   uint32_t saturatedSamples;
 };
+// A 250 ms ADC snapshot sent from the sampling task to the main loop.
+// ADC work stays on its dedicated task: OLED/Serial never interrupt its fast loop.
+struct TeptLiveSample {
+  int adc;
+  int peak250;
+  int baseline;
+  int threshold;
+};
 QueueHandle_t opticalPulseQueue = nullptr;
 QueueHandle_t opticalDiagnosticQueue = nullptr;
 // Latest diagnostic window only: bounded RAM queue, safe to drop if Wi-Fi is down.
 QueueHandle_t remoteDiagnosticQueue = nullptr;
+QueueHandle_t opticalLiveQueue = nullptr;
+TeptLiveSample teptLiveSnapshot{};
+TeptDiagnostic teptLastReport{};
+bool teptLiveReady = false;
 
 QueueHandle_t networkQueue = nullptr;
 SemaphoreHandle_t flashMutex = nullptr;
@@ -304,6 +318,8 @@ void setup() {
   opticalPulseQueue = xQueueCreate(128, sizeof(OpticalPulse));
   opticalDiagnosticQueue = xQueueCreate(1, sizeof(TeptDiagnostic));
   remoteDiagnosticQueue = xQueueCreate(1, sizeof(TeptDiagnostic));
+  opticalLiveQueue = xQueueCreate(1, sizeof(TeptLiveSample));
+  if (!opticalLiveQueue) Serial.println("WARNING: TEPT LIVE VIEW QUEUE UNAVAILABLE");
   if (!opticalPulseQueue || !opticalDiagnosticQueue) {
     Serial.println("CRITICAL: OPTICAL QUEUE ALLOCATION FAILED");
   }
@@ -359,9 +375,23 @@ void loop() {
     ++drained;
   }
 
+  // Read a single-slot snapshot every 250 ms. Never call analogRead() here:
+  // doing so would compete with the dedicated millisecond pulse detector.
+  TeptLiveSample live{};
+  if (opticalLiveQueue &&
+      xQueueReceive(opticalLiveQueue, &live, 0) == pdTRUE) {
+    teptLiveSnapshot = live;
+    teptLiveReady = true;
+    if (TEPT_DIAGNOSTIC_ONLY) {
+      Serial.printf("TEPT RAW adc=%d peak250=%d baseline=%d trigger=%d\n",
+                    live.adc, live.peak250, live.baseline, live.threshold);
+    }
+  }
+
   TeptDiagnostic diag{};
   if (opticalDiagnosticQueue &&
       xQueueReceive(opticalDiagnosticQueue, &diag, 0) == pdTRUE) {
+    teptLastReport = diag;
     if (ENABLE_REMOTE_TEPT_LOGS && remoteDiagnosticQueue)
       xQueueOverwrite(remoteDiagnosticQueue, &diag);
     if (PRINT_TEPT_DIAGNOSTIC) Serial.printf(
@@ -428,6 +458,36 @@ void fillHeartbeat(NetworkEvent& event) {
 }
 
 void renderDisplay(DateTime now) {
+  if (TEPT_DIAGNOSTIC_ONLY) {
+    // Temporary bench-test view: no changes to saved consumption totals.
+    display.clearBuffer();
+    display.setFont(u8g2_font_5x8_tf);
+    display.setCursor(0, 9);
+    display.print("TEPT LIVE ");
+    display.print(WiFi.status() == WL_CONNECTED ? "NET" : "OFF");
+
+    display.setCursor(0, 19);
+    display.print("RAW:"); display.print(teptLiveSnapshot.adc);
+    display.print(" PK:"); display.print(teptLiveSnapshot.peak250);
+
+    display.setCursor(0, 29);
+    display.print("BASE:"); display.print(teptLiveSnapshot.baseline);
+    display.print(" TH:"); display.print(teptLiveSnapshot.threshold);
+
+    display.setCursor(0, 39);
+    display.print("5s MAX:"); display.print(teptLastReport.maximum);
+
+    display.setCursor(0, 49);
+    display.print("HIT:"); display.print(teptLastReport.accepted);
+    display.print(" CAND:"); display.print(teptLastReport.candidates);
+
+    display.setCursor(0, 59);
+    display.print("SHORT:"); display.print(teptLastReport.shortRejected);
+    if (!teptLiveReady) display.print(" INIT");
+    display.sendBuffer();
+    return;
+  }
+
   uint32_t pulses = getLocalPulseCount();
   uint32_t k = getMeterConstant();
   display.clearBuffer();
@@ -528,7 +588,9 @@ void opticalSamplingTask(void* parameter) {
   uint32_t startMs = millis();
   uint32_t lastNearBaselineMs = startMs;
   uint32_t lastReportMs = startMs;
+  uint32_t lastLiveMs = startMs;
   uint32_t lastYieldUs = micros();
+  int livePeak250 = 0;
   int minAdc = 4095, maxAdc = 0;
   int peakDelta = 0;
   int candidatePeak = 0;
@@ -542,6 +604,7 @@ void opticalSamplingTask(void* parameter) {
     ++samples;
     if (adc < minAdc) minAdc = adc;
     if (adc > maxAdc) maxAdc = adc;
+    if (adc > livePeak250) livePeak250 = adc;
     if (adc >= 4090) ++saturatedSamples;
 
     if ((uint32_t)(nowMs - startMs) < TEPT_CALIBRATION_MS) {
@@ -630,6 +693,19 @@ void opticalSamplingTask(void* parameter) {
         // If room illumination changed and stayed changed, shift the baseline.
         baseline += 0.0004f * ((float)adc - baseline);
       }
+    }
+
+    if ((uint32_t)(nowMs - lastLiveMs) >= TEPT_LIVE_WINDOW_MS) {
+      const int currentDelta = max(TEPT_MIN_FLASH_DELTA_ADC,
+          (int)(noise * TEPT_NOISE_MULTIPLIER + TEPT_NOISE_OFFSET));
+      TeptLiveSample live{};
+      live.adc = adc;
+      live.peak250 = livePeak250;
+      live.baseline = (int)baseline;
+      live.threshold = live.baseline + currentDelta;
+      if (opticalLiveQueue) xQueueOverwrite(opticalLiveQueue, &live);
+      livePeak250 = 0;
+      lastLiveMs = nowMs;
     }
 
     if ((uint32_t)(nowMs - lastReportMs) >= TEPT_DIAGNOSTIC_MS) {

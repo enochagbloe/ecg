@@ -41,10 +41,14 @@ constexpr int TEPT_PIN = 34;  // ADC1 works while Wi-Fi is connected.
 // When false, confirmed pulses enter the existing persistent outbox and Render.
 constexpr bool TEPT_DIAGNOSTIC_ONLY = true;
 
-// The breadboard test had ~400 ADC peak with LED, but on-meter values vary.
-// These are tunable *starting* values, not proof of meter accuracy.
-constexpr int TEPT_MIN_FLASH_DELTA_ADC = 30;
-constexpr int TEPT_MIN_RELEASE_DELTA_ADC = 10;
+// WEAK-LIGHT DIAGNOSTIC CALIBRATION: testing against a separate Arduino LED.
+// Live ECG meter counting MUST remain disabled until on/off false-positive
+// tests and known flash-count comparison confirm reliable discrimination.
+// In the previous setup, intermittent ADC peaks of ~18-21 were below 30.
+// These smaller thresholds allow candidate capture, but only validated
+// rising/falling edges with sufficient duration can become accepted flashes.
+constexpr int TEPT_MIN_FLASH_DELTA_ADC = 12;
+constexpr int TEPT_MIN_RELEASE_DELTA_ADC = 4;
 constexpr float TEPT_NOISE_MULTIPLIER = 5.0f;
 constexpr float TEPT_NOISE_OFFSET = 5.0f;
 constexpr float TEPT_BASELINE_ALPHA = 0.0006f; // Slow ambient tracking when OFF

@@ -77,7 +77,8 @@ constexpr int TEPT_TELEMETRY_CONNECT_TIMEOUT_MS = 3000;
 constexpr int TEPT_TELEMETRY_RESPONSE_TIMEOUT_MS = 6000;
 
 // ---------- Intervals ----------
-constexpr unsigned long WIFI_RETRY_MS = 10000;
+// Allow each station connection to finish before another retry.
+constexpr unsigned long WIFI_RETRY_MS = 20000;
 constexpr unsigned long WIFI_SETUP_FALLBACK_MS = 30000;
 constexpr unsigned long PROVISION_RESTART_DELAY_MS = 1500;
 constexpr unsigned long HEARTBEAT_MS = 60000;
@@ -335,7 +336,12 @@ void setup() {
 
   configureProvisioningServer();
   WiFi.persistent(false);
-  WiFi.setAutoReconnect(true);
+  // Use one controlled retry path, not Arduino auto-reconnect plus WiFi.begin().
+  WiFi.setAutoReconnect(false);
+  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+    Serial.printf("WIFI STA DISCONNECTED: reason=%u\n",
+                  (unsigned int)info.wifi_sta_disconnected.reason);
+  }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   if (hasSavedWifiCredentials()) startSavedWifiConnection();
   else startProvisioningMode();
 
@@ -1165,9 +1171,17 @@ void networkTask(void* parameter) {
         unsigned long nowMs = millis();
         if (!wifiFailureSince) wifiFailureSince = nowMs;
         if (nowMs - lastWiFiAttempt >= WIFI_RETRY_MS) {
-          lastWiFiAttempt = nowMs;
-          Serial.println("WIFI RECONNECTING");
-          WiFi.begin(savedWifiSsid.c_str(), savedWifiPassword.c_str());
+          // Cancel a stale STA connection attempt before calling begin again.
+          // disconnect(false,false) keeps the local setup AP running.
+          Serial.printf("WIFI RETRY: previous attempt timed out (status=%d)\n",
+                        (int)WiFi.status());
+          WiFi.disconnect(false, false);
+          vTaskDelay(pdMS_TO_TICKS(200));
+          if (WiFi.status() != WL_CONNECTED) {
+            lastWiFiAttempt = millis();
+            Serial.print("WIFI CONNECTING TO: "); Serial.println(savedWifiSsid);
+            WiFi.begin(savedWifiSsid.c_str(), savedWifiPassword.c_str());
+          }
         }
         if (!provisioningMode && nowMs - wifiFailureSince >= WIFI_SETUP_FALLBACK_MS) {
           Serial.println("WIFI UNAVAILABLE: ENTERING SETUP AP MODE");
@@ -1571,7 +1585,8 @@ button:disabled{opacity:.6}#message{font-size:14px;white-space:pre-wrap}small{co
 <button id="save" type="submit">Save and connect</button>
 </form>
 <p id="message" role="status" aria-live="polite"></p>
-<small>After saving, the device restarts and connects to the selected Wi-Fi. This setup network will disconnect.</small>
+<small>After saving, the device restarts and tries your 2.4 GHz Wi-Fi. Your phone must reconnect to its normal internet connection before opening the online dashboard.</small>
+<a id="dashboard" href="https://ecg-pro.onrender.com/login" style="display:none;margin-top:18px;color:#233d73;font-weight:650">Open ECG online dashboard (after reconnecting your phone)</a>
 </main>
 <script>
 document.getElementById('wifiForm').addEventListener('submit',async function(e){
@@ -1584,7 +1599,7 @@ body:JSON.stringify({ssid:document.getElementById('ssid').value,
 password:document.getElementById('password').value})});
 const data=await response.json();
 if(!response.ok||!data.ok)throw Error(data.error||'Could not save Wi-Fi settings');
-m.textContent='Saved. ECG device is restarting. You can reconnect your phone to your usual Wi-Fi.';
+m.textContent='Wi-Fi settings saved. The ECG device is restarting. Reconnect your phone to normal Wi-Fi or mobile data, then open the dashboard. If it remains offline, check the WIFI STA DISCONNECTED reason in Serial Monitor.';document.getElementById('dashboard').style.display='block';
 }catch(err){m.textContent='Error: '+err.message;b.disabled=false;}
 });
 </script>

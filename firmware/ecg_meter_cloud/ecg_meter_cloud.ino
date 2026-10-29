@@ -475,86 +475,44 @@ void fillHeartbeat(NetworkEvent& event) {
 }
 
 void renderDisplay(DateTime now) {
-  if (TEPT_DIAGNOSTIC_ONLY) {
-    // Temporary bench-test view: no changes to saved consumption totals.
-    display.clearBuffer();
-    display.setFont(u8g2_font_5x8_tf);
-    display.setCursor(0, 9);
-    display.print("TEPT LIVE ");
-    display.print(WiFi.status() == WL_CONNECTED ? "NET" : "OFF");
+  // Show only pulse count, time and network status on the 128x64 OLED.
+  // In diagnostic-only mode these are sensed test flashes, not billing totals.
+  const uint32_t pulses = TEPT_DIAGNOSTIC_ONLY
+      ? (uint32_t)teptDiagnosticCount : getLocalPulseCount();
+  const bool wifiConnected = WiFi.status() == WL_CONNECTED;
+  const uint32_t lastApi = lastApiSuccessMs;
+  const bool cloudOnline = wifiConnected && lastApi != 0 &&
+      (uint32_t)(millis() - lastApi) < API_STATUS_FRESH_MS;
 
-    display.setCursor(0, 19);
-    display.print("RAW:"); display.print(teptLiveSnapshot.adc);
-    display.print(" PK:"); display.print(teptLiveSnapshot.peak250);
-
-    display.setCursor(0, 29);
-    display.print("BASE:"); display.print(teptLiveSnapshot.baseline);
-    display.print(" TH:"); display.print(teptLiveSnapshot.threshold);
-
-    display.setCursor(0, 39);
-    display.print("5s MAX:"); display.print(teptLastReport.maximum);
-
-    display.setCursor(0, 49);
-    display.print("HIT:"); display.print(teptLastReport.accepted);
-    display.print(" CAND:"); display.print(teptLastReport.candidates);
-
-    display.setCursor(0, 59);
-    display.print("W:"); display.print(teptLastReport.maxWidthUs);
-    display.print("us S:"); display.print(teptLastReport.shortRejected);
-    if (!teptLiveReady) display.print(" INIT");
-    display.sendBuffer();
-    return;
-  }
-
-  uint32_t pulses = getLocalPulseCount();
-  uint32_t k = getMeterConstant();
   display.clearBuffer();
-  display.setFont(u8g2_font_5x8_tf);
-  display.setCursor(0, 9);
-  if (TEPT_DIAGNOSTIC_ONLY) {
-    display.print("TEPT TEST #");
-    display.print((unsigned long)teptDiagnosticCount);
-  } else {
-    display.print("ECG POWER METER");
-  }
-  display.setCursor(0, 21);
-  display.print("Power: ");
-  if (k) { display.print(powerKW, 2); display.print(" kW"); }
-  else display.print("CONFIG");
-  display.setCursor(0, 33);
-  display.print("Energy: ");
-  if (k) display.print(energyKWh, 4);
-  else display.print("CONFIG");
-  display.setCursor(0, 45);
-  display.print("L:"); display.print(pulses);
-  if (cloudTotalKnown) {
-    display.print(" S:"); display.print((unsigned long)cloudPulseCount);
-  } else {
-    display.print(" S:?");
-  }
-  display.setCursor(0, 58);
-  if (now.hour() < 10) display.print('0');
-  display.print(now.hour()); display.print(':');
-  if (now.minute() < 10) display.print('0');
-  display.print(now.minute()); display.print(':');
-  if (now.second() < 10) display.print('0');
-  display.print(now.second());
+  display.setFont(u8g2_font_6x12_tf);
+  display.setCursor(0, 12);
+  display.print("ECG SMART POWER");
 
-  display.setCursor(91, 58);
-  if (!sequenceReady) {
-    display.print(sequenceConflict ? "HALT" : "SYNC");
-  } else if (WiFi.status() == WL_CONNECTED) {
-    uint32_t lastApi = lastApiSuccessMs;
-    if (lastApi != 0 && (uint32_t)(millis() - lastApi) < API_STATUS_FRESH_MS) {
-      display.print("API");
-    } else {
-      display.print("NET");
-    }
-  } else if (provisioningMode) {
-    display.print("SET");
+  display.setFont(u8g2_font_7x14_tf);
+  display.setCursor(0, 33);
+  display.print("PULSES: ");
+  display.print((unsigned long)pulses);
+
+  display.setFont(u8g2_font_6x12_tf);
+  display.setCursor(0, 47);
+  display.print("TIME: ");
+  if (now.year() >= 2024 && now.year() <= 2099) {
+    if (now.hour() < 10) display.print('0');
+    display.print(now.hour()); display.print(':');
+    if (now.minute() < 10) display.print('0');
+    display.print(now.minute()); display.print(':');
+    if (now.second() < 10) display.print('0');
+    display.print(now.second());
   } else {
-    display.print("OFF");
+    display.print("--:--:--");
   }
+
+  display.setCursor(0, 62);
+  display.print("NET: ");
+  if (!wifiConnected) display.print("OFFLINE");
+  else if (cloudOnline) display.print("ONLINE");
+  else display.print("WIFI ONLY");
   display.sendBuffer();
 }
 

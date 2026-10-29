@@ -1542,7 +1542,55 @@ bool extractJsonString(const String& body, const char* key, String& value) {
 
 void configureProvisioningServer() {
   setupServer.on("/", HTTP_GET, []() {
-    setupServer.send(200, "text/plain", "ECG Smart Power setup device");
+    // Local setup page (only served while the ECG-001-SETUP access point is active).
+    // Never display or return the stored Wi-Fi password to a browser.
+    static const char page[] = R"ECGHTML(<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ECG Wi-Fi Setup</title>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#f5f6fa;color:#182237;margin:0;padding:28px 14px}
+main{max-width:410px;margin:7vh auto;background:white;padding:28px;border:1px solid #dce1ea;border-radius:14px;box-shadow:0 10px 30px #14213d12}
+h1{font-size:23px;margin:0 0 8px}p{color:#49566a;line-height:1.5}
+label{display:block;font-weight:600;font-size:14px;margin:20px 0 7px}
+input{box-sizing:border-box;width:100%;padding:13px;border:1px solid #aeb9c9;border-radius:8px;font-size:16px}
+button{width:100%;background:#233d73;color:white;border:0;border-radius:8px;padding:14px;font-weight:650;font-size:16px;margin-top:22px}
+button:disabled{opacity:.6}#message{font-size:14px;white-space:pre-wrap}small{color:#667085}
+</style>
+</head>
+<body><main>
+<h1>ECG Wi-Fi Setup</h1>
+<p>Connect your ECG device to a 2.4 GHz Wi-Fi network. Enter the network name and password below.</p>
+<form id="wifiForm">
+<label for="ssid">Wi-Fi network name (SSID)</label>
+<input id="ssid" name="ssid" maxlength="32" autocomplete="off" required>
+<label for="password">Wi-Fi password</label>
+<input id="password" name="password" type="password" maxlength="63" autocomplete="new-password">
+<button id="save" type="submit">Save and connect</button>
+</form>
+<p id="message" role="status" aria-live="polite"></p>
+<small>After saving, the device restarts and connects to the selected Wi-Fi. This setup network will disconnect.</small>
+</main>
+<script>
+document.getElementById('wifiForm').addEventListener('submit',async function(e){
+e.preventDefault();
+const b=document.getElementById('save'),m=document.getElementById('message');
+b.disabled=true;m.textContent='Saving Wi-Fi settings...';
+try{
+const response=await fetch('/provision',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({ssid:document.getElementById('ssid').value,
+password:document.getElementById('password').value})});
+const data=await response.json();
+if(!response.ok||!data.ok)throw Error(data.error||'Could not save Wi-Fi settings');
+m.textContent='Saved. ECG device is restarting. You can reconnect your phone to your usual Wi-Fi.';
+}catch(err){m.textContent='Error: '+err.message;b.disabled=false;}
+});
+</script>
+</body></html>)ECGHTML";
+    setupServer.sendHeader("Cache-Control", "no-store");
+    setupServer.send(200, "text/html; charset=utf-8", page);
   });
   setupServer.on("/status", HTTP_GET, []() {
     setupServer.sendHeader("Cache-Control", "no-store");

@@ -78,6 +78,7 @@ constexpr int TEPT_TELEMETRY_RESPONSE_TIMEOUT_MS = 6000;
 
 // ---------- Intervals ----------
 constexpr unsigned long WIFI_RETRY_MS = 10000;
+constexpr unsigned long WIFI_JOIN_TIMEOUT_MS = 25000;
 constexpr unsigned long WIFI_SETUP_FALLBACK_MS = 30000;
 constexpr unsigned long PROVISION_RESTART_DELAY_MS = 1500;
 constexpr unsigned long HEARTBEAT_MS = 60000;
@@ -130,6 +131,9 @@ unsigned long lastConfigAttempt = 0;
 unsigned long lastNtpPoll = 0;
 unsigned long lastNtpRtcSync = 0;
 unsigned long provisionRestartAt = 0;
+// Shared with Wi-Fi event callbacks on the network event task.
+volatile bool wifiJoinInProgress = false;
+volatile uint8_t wifiLastDisconnectReason = 0;
 
 // NET = associated to Wi-Fi, API = an HTTP success within last two minutes.
 volatile uint32_t lastApiSuccessMs = 0;
@@ -335,7 +339,18 @@ void setup() {
 
   configureProvisioningServer();
   WiFi.persistent(false);
-  WiFi.setAutoReconnect(true);
+  // The network worker owns all retries. Do not race ESP32's automatic
+  // reconnect against repeated WiFi.begin() configuration calls.
+  WiFi.setAutoReconnect(false);
+  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+    wifiJoinInProgress = false;
+    wifiLastDisconnectReason = info.wifi_sta_disconnected.reason;
+    Serial.printf("WIFI DISCONNECTED REASON: %u\n",
+                  (unsigned int)wifiLastDisconnectReason);
+  }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) {
+    wifiJoinInProgress = false;
+  }, ARDUINO_EVENT_WIFI_STA_GOT_IP);
   if (hasSavedWifiCredentials()) startSavedWifiConnection();
   else startProvisioningMode();
 
@@ -1122,10 +1137,27 @@ void networkTask(void* parameter) {
       } else {
         unsigned long nowMs = millis();
         if (!wifiFailureSince) wifiFailureSince = nowMs;
-        if (nowMs - lastWiFiAttempt >= WIFI_RETRY_MS) {
+        if (wifiJoinInProgress &&
+            nowMs - lastWiFiAttempt >= WIFI_JOIN_TIMEOUT_MS) {
+          // Cancel a stuck attempt without erasing saved SSID/password.
+          wifiJoinInProgress = false;
           lastWiFiAttempt = nowMs;
-          Serial.println("WIFI RECONNECTING");
-          WiFi.begin(savedWifiSsid.c_str(), savedWifiPassword.c_str());
+          Serial.println("WIFI JOIN TIMEOUT; RESETTING STATION ATTEMPT");
+          WiFi.disconnect(false, false);
+        }
+        if (!wifiJoinInProgress &&
+            nowMs - lastWiFiAttempt >= WIFI_RETRY_MS) {
+          lastWiFiAttempt = nowMs;
+          wifiJoinInProgress = true;
+          Serial.printf("WIFI RETRY: status=%d lastReason=%u\n",
+                        (int)WiFi.status(),
+                        (unsigned int)wifiLastDisconnectReason);
+          // This retries the existing STA configuration. It does not call
+          // esp_wifi_set_config() again during an in-progress connection.
+          if (!WiFi.reconnect()) {
+            wifiJoinInProgress = false;
+            Serial.println("WIFI RECONNECT REQUEST FAILED");
+          }
         }
         if (!provisioningMode && nowMs - wifiFailureSince >= WIFI_SETUP_FALLBACK_MS) {
           Serial.println("WIFI UNAVAILABLE: ENTERING SETUP AP MODE");
@@ -1437,9 +1469,11 @@ void startSavedWifiConnection() {
   if (!hasSavedWifiCredentials()) { startProvisioningMode(); return; }
   WiFi.mode(provisioningMode ? WIFI_AP_STA : WIFI_STA);
   Serial.print("CONNECTING TO SAVED WIFI: "); Serial.println(savedWifiSsid);
-  WiFi.begin(savedWifiSsid.c_str(), savedWifiPassword.c_str());
+  wifiJoinInProgress = true;
   lastWiFiAttempt = millis();
   wifiFailureSince = millis();
+  // Initial configuration only; network worker retries without WiFi.begin().
+  WiFi.begin(savedWifiSsid.c_str(), savedWifiPassword.c_str());
 }
 
 void startProvisioningMode() {

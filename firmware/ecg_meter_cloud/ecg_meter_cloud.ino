@@ -25,6 +25,7 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <WebServer.h>
+#include "MultiWifiManager.h"
 #include <Preferences.h>
 #include <LittleFS.h>
 #include <freertos/FreeRTOS.h>
@@ -77,10 +78,6 @@ constexpr int TEPT_TELEMETRY_CONNECT_TIMEOUT_MS = 3000;
 constexpr int TEPT_TELEMETRY_RESPONSE_TIMEOUT_MS = 6000;
 
 // ---------- Intervals ----------
-constexpr unsigned long WIFI_RETRY_MS = 10000;
-constexpr unsigned long WIFI_JOIN_TIMEOUT_MS = 25000;
-constexpr unsigned long WIFI_SETUP_FALLBACK_MS = 30000;
-constexpr unsigned long PROVISION_RESTART_DELAY_MS = 1500;
 constexpr unsigned long HEARTBEAT_MS = 60000;
 constexpr unsigned long CONFIG_RETRY_MS = 15000;
 constexpr unsigned long NTP_POLL_MS = 2000;
@@ -101,7 +98,6 @@ const char* NTP_SERVER_2 = "time.google.com";
 // ---------- Shared state ----------
 uint32_t meterConstant = 0;
 volatile bool meterConstantReady = false;
-volatile bool provisioningMode = false;
 volatile bool flashReady = false;
 bool rtcReady = false;
 volatile bool rtcTimeTrusted = false;
@@ -125,15 +121,9 @@ uint64_t lastSyncedSequence = 0;
 unsigned long lastPulseTime = 0;
 unsigned long lastHeartbeatQueued = 0;
 unsigned long lastDisplayRefresh = 0;
-unsigned long lastWiFiAttempt = 0;
-unsigned long wifiFailureSince = 0;
 unsigned long lastConfigAttempt = 0;
 unsigned long lastNtpPoll = 0;
 unsigned long lastNtpRtcSync = 0;
-unsigned long provisionRestartAt = 0;
-// Shared with Wi-Fi event callbacks on the network event task.
-volatile bool wifiJoinInProgress = false;
-volatile uint8_t wifiLastDisconnectReason = 0;
 
 // NET = associated to Wi-Fi, API = an HTTP success within last two minutes.
 volatile uint32_t lastApiSuccessMs = 0;
@@ -141,11 +131,9 @@ volatile uint32_t lastApiSuccessMs = 0;
 RTC_DS3231 rtc;
 Preferences preferences;
 WebServer setupServer(80);
+MultiWifiManager wifiManager(setupServer);
 U8G2_SH1106_128X64_NONAME_F_HW_I2C display(U8G2_R0, U8X8_PIN_NONE, 22, 21);
 
-String savedWifiSsid;
-String savedWifiPassword;
-String setupApSsid;
 
 struct NetworkEvent {
   uint8_t pulse;                 // 1 = optical pulse, 0 = heartbeat
@@ -238,13 +226,9 @@ bool applyMeterConstantFromResponse(const String& response);
 SendResult postEvent(const NetworkEvent& event, String* responseOut = nullptr);
 bool syncDeviceConfigViaHeartbeat();
 void networkTask(void* parameter);
+void wifiManagerTask(void* parameter);
 
-bool hasSavedWifiCredentials();
-void startSavedWifiConnection();
-void startProvisioningMode();
-void stopProvisioningMode();
 bool extractJsonString(const String& body, const char* key, String& value);
-void configureProvisioningServer();
 bool postRemoteOpticalDiagnostic(const TeptDiagnostic& diagnostic);
 
 // ---------- Startup ----------
@@ -273,9 +257,9 @@ void setup() {
     Serial.println("CRITICAL: PREFERENCES/NVS OPEN FAILED");
   }
 
-  savedWifiSsid = preferences.getString("wifiSsid", "");
-  savedWifiPassword = preferences.getString("wifiPassword", "");
-  setupApSsid = String(DEVICE_ID) + "-SETUP";
+  // Read-only legacy migration; pulse keys and old Wi-Fi keys stay intact.
+  String legacySsid = preferences.getString("wifiSsid", "");
+  String legacyPassword = preferences.getString("wifiPassword", "");
 
   meterConstant = preferences.getUInt("meterConst", 0);
   meterConstantReady = (meterConstant >= 1 && meterConstant <= 100000);
@@ -337,22 +321,11 @@ void setup() {
     Serial.println("CRITICAL: OPTICAL QUEUE ALLOCATION FAILED");
   }
 
-  configureProvisioningServer();
-  WiFi.persistent(false);
-  // The network worker owns all retries. Do not race ESP32's automatic
-  // reconnect against repeated WiFi.begin() configuration calls.
-  WiFi.setAutoReconnect(false);
-  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
-    wifiJoinInProgress = false;
-    wifiLastDisconnectReason = info.wifi_sta_disconnected.reason;
-    Serial.printf("WIFI DISCONNECTED REASON: %u\n",
-                  (unsigned int)wifiLastDisconnectReason);
-  }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
-  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) {
-    wifiJoinInProgress = false;
-  }, ARDUINO_EVENT_WIFI_STA_GOT_IP);
-  if (hasSavedWifiCredentials()) startSavedWifiConnection();
-  else startProvisioningMode();
+  wifiManager.begin(legacySsid, legacyPassword, String(DEVICE_ID) + "-SETUP", DEVICE_ID);
+  if (xTaskCreatePinnedToCore(wifiManagerTask, "wifiManager", 8192,
+      nullptr, 1, nullptr, 0) != pdPASS) {
+    Serial.println("CRITICAL: WIFI MANAGER TASK DID NOT START");
+  }
 
   BaseType_t taskCreated = xTaskCreatePinnedToCore(
     networkTask, "networkTask", 10240, nullptr, 1, nullptr, 0
@@ -1099,71 +1072,34 @@ bool postRemoteOpticalDiagnostic(const TeptDiagnostic& d) {
   return true;
 }
 
+// Dedicated owner remains responsive even while the backend worker waits on TLS.
+void wifiManagerTask(void* parameter) {
+  for (;;) {
+    wifiManager.tick();
+    vTaskDelay(pdMS_TO_TICKS(25));
+  }
+}
+
 // ---------- Network worker ----------
 void networkTask(void* parameter) {
   bool wasConnected = false;
   bool configSyncPending = true;
+  uint32_t seenWifiGeneration = 0;
 
   while (true) {
-    if (provisioningMode) {
-      setupServer.handleClient();
-      if (provisionRestartAt > 0 &&
-          (long)(millis() - provisionRestartAt) >= 0) {
-        Serial.println("RESTARTING WITH SAVED WIFI");
-        delay(100);
-        ESP.restart();
-      }
-    }
-
-    bool connected = WiFi.status() == WL_CONNECTED;
-    if (connected && !wasConnected) {
+    bool connected = WiFi.status() == WL_CONNECTED && wifiManager.connectionReady();
+    uint32_t wifiGeneration = wifiManager.connectionGeneration();
+    if (connected && (!wasConnected || wifiGeneration != seenWifiGeneration)) {
       wasConnected = true;
-      wifiFailureSince = 0;
+      seenWifiGeneration = wifiGeneration;
       configSyncPending = true;
-      sequenceReady = false;  // Reconcile remote head before continuing uploads.
+      sequenceReady = false;  // Keep the existing server-head guard on every link generation.
       lastConfigAttempt = 0;
       lastNtpPoll = 0;
-      Serial.println("WIFI CONNECTED");
-      Serial.print("IP: "); Serial.println(WiFi.localIP());
-      if (provisioningMode) stopProvisioningMode();
-      // Non-blocking SNTP; avoids waiting 8 seconds before first API POST.
       configTime(0, 0, NTP_SERVER_1, NTP_SERVER_2);
     }
-
     if (!connected) {
       wasConnected = false;
-      if (!hasSavedWifiCredentials()) {
-        if (!provisioningMode) startProvisioningMode();
-      } else {
-        unsigned long nowMs = millis();
-        if (!wifiFailureSince) wifiFailureSince = nowMs;
-        if (wifiJoinInProgress &&
-            nowMs - lastWiFiAttempt >= WIFI_JOIN_TIMEOUT_MS) {
-          // Cancel a stuck attempt without erasing saved SSID/password.
-          wifiJoinInProgress = false;
-          lastWiFiAttempt = nowMs;
-          Serial.println("WIFI JOIN TIMEOUT; RESETTING STATION ATTEMPT");
-          WiFi.disconnect(false, false);
-        }
-        if (!wifiJoinInProgress &&
-            nowMs - lastWiFiAttempt >= WIFI_RETRY_MS) {
-          lastWiFiAttempt = nowMs;
-          wifiJoinInProgress = true;
-          Serial.printf("WIFI RETRY: status=%d lastReason=%u\n",
-                        (int)WiFi.status(),
-                        (unsigned int)wifiLastDisconnectReason);
-          // This retries the existing STA configuration. It does not call
-          // esp_wifi_set_config() again during an in-progress connection.
-          if (!WiFi.reconnect()) {
-            wifiJoinInProgress = false;
-            Serial.println("WIFI RECONNECT REQUEST FAILED");
-          }
-        }
-        if (!provisioningMode && nowMs - wifiFailureSince >= WIFI_SETUP_FALLBACK_MS) {
-          Serial.println("WIFI UNAVAILABLE: ENTERING SETUP AP MODE");
-          startProvisioningMode();
-        }
-      }
       vTaskDelay(pdMS_TO_TICKS(50));
       continue;
     }
@@ -1175,7 +1111,11 @@ void networkTask(void* parameter) {
     if (configSyncPending &&
         (lastConfigAttempt == 0 || millis() - lastConfigAttempt >= CONFIG_RETRY_MS)) {
       lastConfigAttempt = millis();
-      if (syncDeviceConfigViaHeartbeat()) configSyncPending = false;
+      if (syncDeviceConfigViaHeartbeat()) {
+        configSyncPending = false;
+        Serial.println("BACKEND CONNECTION RESTORED");
+        Serial.println("RESUMING PENDING UPLOADS");
+      }
     }
 
     if (!sequenceReady) {
@@ -1462,44 +1402,7 @@ uint32_t getMeterConstant() {
   return value;
 }
 
-// ---------- Local Wi-Fi provisioning ----------
-bool hasSavedWifiCredentials() { return savedWifiSsid.length() > 0; }
-
-void startSavedWifiConnection() {
-  if (!hasSavedWifiCredentials()) { startProvisioningMode(); return; }
-  WiFi.mode(provisioningMode ? WIFI_AP_STA : WIFI_STA);
-  Serial.print("CONNECTING TO SAVED WIFI: "); Serial.println(savedWifiSsid);
-  wifiJoinInProgress = true;
-  lastWiFiAttempt = millis();
-  wifiFailureSince = millis();
-  // Initial configuration only; network worker retries without WiFi.begin().
-  WiFi.begin(savedWifiSsid.c_str(), savedWifiPassword.c_str());
-}
-
-void startProvisioningMode() {
-  if (provisioningMode) return;
-  WiFi.mode(hasSavedWifiCredentials() ? WIFI_AP_STA : WIFI_AP);
-  if (!WiFi.softAP(setupApSsid.c_str())) {
-    Serial.println("SETUP AP START FAILED");
-    return;
-  }
-  setupServer.begin();
-  provisioningMode = true;
-  provisionRestartAt = 0;
-  Serial.print("SETUP AP: "); Serial.println(setupApSsid);
-  Serial.print("SETUP PAGE IP: "); Serial.println(WiFi.softAPIP());
-}
-
-void stopProvisioningMode() {
-  if (!provisioningMode) return;
-  setupServer.stop();
-  WiFi.softAPdisconnect(true);
-  provisioningMode = false;
-  provisionRestartAt = 0;
-  WiFi.mode(WIFI_STA);
-  Serial.println("SETUP MODE CLOSED");
-}
-
+// ---------- Backend response string decoder ----------
 bool extractJsonString(const String& body, const char* key, String& value) {
   String token = String("\"") + key + "\"";
   int pos = body.indexOf(token);
@@ -1530,98 +1433,4 @@ bool extractJsonString(const String& body, const char* key, String& value) {
     } else parsed += ch;
   }
   return false;
-}
-
-void configureProvisioningServer() {
-  setupServer.on("/", HTTP_GET, []() {
-    // Local setup page (only served while the ECG-001-SETUP access point is active).
-    // Never display or return the stored Wi-Fi password to a browser.
-    static const char page[] = R"ECGHTML(<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ECG Wi-Fi Setup</title>
-<style>
-body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#f5f6fa;color:#182237;margin:0;padding:28px 14px}
-main{max-width:410px;margin:7vh auto;background:white;padding:28px;border:1px solid #dce1ea;border-radius:14px;box-shadow:0 10px 30px #14213d12}
-h1{font-size:23px;margin:0 0 8px}p{color:#49566a;line-height:1.5}
-label{display:block;font-weight:600;font-size:14px;margin:20px 0 7px}
-input{box-sizing:border-box;width:100%;padding:13px;border:1px solid #aeb9c9;border-radius:8px;font-size:16px}
-button{width:100%;background:#233d73;color:white;border:0;border-radius:8px;padding:14px;font-weight:650;font-size:16px;margin-top:22px}
-button:disabled{opacity:.6}#message{font-size:14px;white-space:pre-wrap}small{color:#667085}
-</style>
-</head>
-<body><main>
-<h1>ECG Wi-Fi Setup</h1>
-<p>Connect your ECG device to a 2.4 GHz Wi-Fi network. Enter the network name and password below.</p>
-<form id="wifiForm">
-<label for="ssid">Wi-Fi network name (SSID)</label>
-<input id="ssid" name="ssid" maxlength="32" autocomplete="off" required>
-<label for="password">Wi-Fi password</label>
-<input id="password" name="password" type="password" maxlength="63" autocomplete="new-password">
-<button id="save" type="submit">Save and connect</button>
-</form>
-<p id="message" role="status" aria-live="polite"></p>
-<small>After saving, the device restarts and tries your 2.4 GHz Wi-Fi. Your phone must reconnect to its normal internet connection before opening the online dashboard.</small>
-<a id="dashboard" href="https://ecg-pro.onrender.com/login" style="display:none;margin-top:18px;color:#233d73;font-weight:650">Open ECG online dashboard (after reconnecting your phone)</a>
-</main>
-<script>
-document.getElementById('wifiForm').addEventListener('submit',async function(e){
-e.preventDefault();
-const b=document.getElementById('save'),m=document.getElementById('message');
-b.disabled=true;m.textContent='Saving Wi-Fi settings...';
-try{
-const response=await fetch('/provision',{method:'POST',headers:{'Content-Type':'application/json'},
-body:JSON.stringify({ssid:document.getElementById('ssid').value,
-password:document.getElementById('password').value})});
-const data=await response.json();
-if(!response.ok||!data.ok)throw Error(data.error||'Could not save Wi-Fi settings');
-m.textContent='Wi-Fi settings saved. The ECG device is restarting. Reconnect your phone to normal Wi-Fi or mobile data, then open the dashboard. If it remains offline, check the WIFI STA DISCONNECTED reason in Serial Monitor.';document.getElementById('dashboard').style.display='block';
-}catch(err){m.textContent='Error: '+err.message;b.disabled=false;}
-});
-</script>
-</body></html>)ECGHTML";
-    setupServer.sendHeader("Cache-Control", "no-store");
-    setupServer.send(200, "text/html; charset=utf-8", page);
-  });
-  setupServer.on("/status", HTTP_GET, []() {
-    setupServer.sendHeader("Cache-Control", "no-store");
-    setupServer.send(200, "application/json",
-      String("{\"deviceId\":\"") + DEVICE_ID +
-      "\",\"setupMode\":" + (provisioningMode ? "true" : "false") + "}");
-  });
-  setupServer.on("/provision", HTTP_POST, []() {
-    String ssid, password;
-    String body = setupServer.arg("plain");
-    if (!extractJsonString(body, "ssid", ssid) ||
-        !extractJsonString(body, "password", password)) {
-      setupServer.send(400, "application/json",
-        "{\"ok\":false,\"error\":\"Provide JSON ssid and password strings\"}");
-      return;
-    }
-    ssid.trim();
-    if (ssid.length() < 1 || ssid.length() > 32 || password.length() > 63) {
-      setupServer.send(400, "application/json",
-        "{\"ok\":false,\"error\":\"Invalid SSID/password length\"}");
-      return;
-    }
-    if (!preferences.putString("wifiSsid", ssid)) {
-      setupServer.send(500, "application/json",
-        "{\"ok\":false,\"error\":\"Wi-Fi settings not saved\"}");
-      return;
-    }
-    preferences.putString("wifiPassword", password);
-    savedWifiSsid = ssid;
-    savedWifiPassword = password;
-    Serial.print("WIFI SETTINGS UPDATED FOR SSID: "); Serial.println(savedWifiSsid);
-    setupServer.sendHeader("Cache-Control", "no-store");
-    setupServer.send(200, "application/json",
-      String("{\"ok\":true,\"deviceId\":\"") + DEVICE_ID +
-      "\",\"restarting\":true}");
-    provisionRestartAt = millis() + PROVISION_RESTART_DELAY_MS;
-  });
-  setupServer.onNotFound([]() {
-    setupServer.send(404, "application/json", "{\"ok\":false,\"error\":\"Not found\"}");
-  });
 }

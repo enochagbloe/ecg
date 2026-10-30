@@ -1,0 +1,48 @@
+name: Firmware Wi-Fi validation
+on:
+  pull_request:
+    paths: ['firmware/ecg_meter_cloud/**', '.github/workflows/firmware-wifi.yml']
+  push:
+    branches: [main, 'codex/multi-network-wifi']
+    paths: ['firmware/ecg_meter_cloud/**', '.github/workflows/firmware-wifi.yml']
+permissions:
+  contents: read
+jobs:
+  policy-and-onboarding:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run the firmware's shared connection policy
+        run: |
+          cc -std=c99 -Wall -Wextra -Werror firmware/ecg_meter_cloud/tests/wifi_policy_test.c -o /tmp/ecg-wifi-tests
+          /tmp/ecg-wifi-tests
+      - name: Test the actual onboarding script
+        run: node --test firmware/ecg_meter_cloud/tests/onboarding.test.mjs
+  compile-esp32:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: arduino/setup-arduino-cli@v2
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.arduino15
+            ~/Arduino/libraries
+          key: esp32-3.3.12-u8g2-2.36.19-rtc-2.1.4-busio-1.17.4
+      - name: Install tested core and libraries
+        run: |
+          arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core install esp32:esp32@3.3.12 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli lib install 'Adafruit BusIO@1.17.4' 'RTClib@2.1.4' 'U8g2@2.36.19'
+      - name: Compile with isolated dummy credentials (no upload)
+        run: |
+          cat > firmware/ecg_meter_cloud/secrets.h <<'EOF'
+          #define DEVICE_ID "ECG-CI"
+          #define DEVICE_SECRET "COMPILE_ONLY_NOT_A_REAL_KEY"
+          #define API_URL "https://example.invalid/api/v1/device/pulse"
+          EOF
+          arduino-cli compile --fqbn esp32:esp32:esp32 firmware/ecg_meter_cloud

@@ -1,5 +1,5 @@
 /*
-  ECG optical pulse prototype â€” TEPT4400 phototransistor / sequence-guard revision
+  ECG optical pulse prototype — TEPT4400 phototransistor / sequence-guard revision
   Target: classic ESP32 DevKit (ESP-WROOM-32), Arduino-ESP32
   Hardware: TEPT4400 on GPIO34 with 10 kOhm pull-down, I2C SDA=21 SCL=22, DS3231, SH1106 OLED
   Backend: existing authenticated POST endpoint in secrets.h
@@ -772,7 +772,7 @@ void handleAcceptedPulse(int lightValue, unsigned long nowMs) {
 
   if (!durable) {
     if (!networkQueue || xQueueSend(networkQueue, &event, 0) != pdTRUE) {
-      Serial.println("CRITICAL: PULSE COULD NOT BE QUEUED â€” DATA MAY BE LOST");
+      Serial.println("CRITICAL: PULSE COULD NOT BE QUEUED — DATA MAY BE LOST");
     }
   }
 

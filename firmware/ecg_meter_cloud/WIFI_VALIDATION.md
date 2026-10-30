@@ -2,7 +2,7 @@
 
 - Full compile/link passed for classic ESP32 (`esp32:esp32:esp32`) with
   Arduino-ESP32 3.3.12, U8g2 2.36.19, RTClib 2.1.4 and Adafruit BusIO 1.17.4.
-- Program: **1,188,720 / 1,310,720 bytes (90%)**.
+- Program: **1,188,736 / 1,310,720 bytes (90%)**.
 - Static globals: **53,056 / 327,680 bytes (16%)**. Runtime stacks, scan results,
   Wi-Fi/TLS buffers and other heap allocations are additional. The manager task
   is configured with an 8192-byte stack; runtime memory/stack margins need bench checks.
@@ -26,6 +26,12 @@
 RF/channel behavior, runtime stack measurements, and disconnect-after-server-
 commit/lost-ACK testing. Scenario 8 has source-preservation/link-epoch checks,
 not an end-to-end hardware result. Follow [WIFI_TEST_PLAN.md](WIFI_TEST_PLAN.md).
+
+GitHub also passed the native/onboarding job and the complete ESP32 compile.
+Its separate Backend CI failed in unchanged TypeScript tests: read-only NODE_ENV
+assignments in dashboardLogin.test.ts and outdated/missing Prisma fixture fields
+in provisioning.test.ts, pulse.test.ts and reset.test.ts. No ecg-pro files or its
+workflow were changed; those failures are outside this Wi-Fi implementation.
 
 No ESP32 was flashed, no saved meter readings were reset, and no backend
 records were changed during this implementation. Builds used an isolated

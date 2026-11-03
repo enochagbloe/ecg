@@ -21,7 +21,7 @@ test("form login issues signed HttpOnly cookie accepted by the existing dashboar
   const oldNodeEnv = process.env.NODE_ENV;
   process.env.DASHBOARD_USERNAME = "ecg-test-user";
   process.env.DASHBOARD_PASSWORD = "this-is-a-long-dashboard-test-password-2026";
-  process.env.NODE_ENV = "production";
+  process.env = { ...process.env, NODE_ENV: "production" };
   try {
     const { res, headers } = makeResponse();
     assert.throws(
@@ -51,7 +51,6 @@ test("form login issues signed HttpOnly cookie accepted by the existing dashboar
     else process.env.DASHBOARD_USERNAME = oldUsername;
     if (oldPassword === undefined) delete process.env.DASHBOARD_PASSWORD;
     else process.env.DASHBOARD_PASSWORD = oldPassword;
-    if (oldNodeEnv === undefined) delete process.env.NODE_ENV;
-    else process.env.NODE_ENV = oldNodeEnv;
+    process.env = { ...process.env, NODE_ENV: oldNodeEnv };
   }
 });

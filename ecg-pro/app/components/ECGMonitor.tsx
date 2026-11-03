@@ -5,6 +5,7 @@ import { io } from "socket.io-client";
 
 import { createMeterUpdates, type PulseData } from "./meterUpdates";
 import OpticalDiagnostics from "./OpticalDiagnostics";
+import ConsumptionAnalytics from "./ConsumptionAnalytics";
 
 export default function ECGMonitor() {
   const [pulseData, setPulseData] = useState<PulseData | null>(null);
@@ -53,9 +54,9 @@ export default function ECGMonitor() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
-      <div className="max-w-4xl mx-auto">
-        <div className="bg-white rounded-2xl shadow-xl p-8">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-3 sm:p-8">
+      <div className="max-w-7xl mx-auto">
+        <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-8">
           <div className="flex items-center justify-between mb-8">
             <h1 className="text-3xl font-bold text-gray-800">ECG Energy Monitor</h1>
             <div className="flex items-center gap-2">
@@ -103,6 +104,7 @@ export default function ECGMonitor() {
               <p className="text-gray-600">{loadError || "Waiting for data..."}</p>
             </div>
           )}
+          <ConsumptionAnalytics deviceId={process.env.NEXT_PUBLIC_DEVICE_ID || "ECG-001"} />
           <OpticalDiagnostics deviceId={process.env.NEXT_PUBLIC_DEVICE_ID || "ECG-001"} />
         </div>
       </div>

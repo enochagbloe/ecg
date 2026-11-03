@@ -6,6 +6,7 @@ import logger from "../libs/logger";
 import { prisma } from "../libs/prisma";
 import { devicePulse } from "./routes/devicePulse";
 import { deviceState } from "./routes/deviceState";
+import { deviceAnalytics } from "./routes/deviceAnalytics";
 import { receiveOpticalDiagnostic, listOpticalDiagnostics } from "./routes/opticalDiagnostics";
 import { createDeviceResetHandler } from "./routes/deviceReset";
 import { health } from "./routes/health";
@@ -172,6 +173,12 @@ async function main() {
           throw new HttpError(405, "Method not allowed");
         }
         await deviceState(req, res, stateMatch[1]);
+        return;
+      }
+
+      const analyticsMatch = /^\/api\/v1\/devices\/([A-Za-z0-9_-]+)\/analytics$/.exec(pathname);
+      if (analyticsMatch) {
+        await deviceAnalytics(req, res, analyticsMatch[1]);
         return;
       }
 

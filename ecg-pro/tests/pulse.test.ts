@@ -16,7 +16,7 @@ function input(sequence = 1, milliseconds = 0, pulse: 0 | 1 = 1): PulseInput {
 // PostgreSQL row locking is verified separately by the opt-in integration test.
 class MemoryStore implements PulseStore {
   device: Device = {
-    id: "internal-id", hardwareId: "ECG-001", name: null, apiKeyHash: hashSecret(token),
+    id: "internal-id", hardwareId: "ECG-001", name: null, apiKeyHash: hashSecret(token), claimCodeHash: null,
     meterConstant: 1600, isActive: true, lastSeenAt: null, firmwareVersion: null,
     createdAt: new Date(), updatedAt: new Date(),
   };

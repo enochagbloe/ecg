@@ -69,6 +69,7 @@ model PulseEvent {
 
   @@unique([deviceId, sequence])
   @@index([deviceId, occurredAt])
+  @@index([deviceId, receivedAt])
 }
 
 model MeterState {

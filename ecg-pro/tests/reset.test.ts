@@ -14,7 +14,7 @@ import type { DeviceResetEvent } from "../libs/deviceEvents";
 
 class MemoryResetStore implements DeviceResetStore {
   device: Device = {
-    id: "internal-1", hardwareId: "ECG-001", name: "Test meter", apiKeyHash: "a".repeat(64),
+    id: "internal-1", hardwareId: "ECG-001", name: "Test meter", apiKeyHash: "a".repeat(64), claimCodeHash: null,
     meterConstant: 800, isActive: false, firmwareVersion: "1.2", lastSeenAt: new Date(),
     createdAt: new Date("2025-01-01"), updatedAt: new Date(),
   };

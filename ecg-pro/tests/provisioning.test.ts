@@ -24,7 +24,7 @@ test("shared calibration validator rejects invalid values in provisioning and ca
 });
 
 test("bootstrap environment requires explicit valid calibration with no fallback", () => {
-  assert.deepEqual(bootstrapEnvironmentSchema.parse(env), input);
+  assert.deepEqual(bootstrapEnvironmentSchema.parse(env), { ...input, claimCode: undefined });
   for (const value of [undefined, "", " ", "0", "-1", "1.5", "NaN", "Infinity", "100001", "1600oops"]) {
     assert.equal(bootstrapEnvironmentSchema.safeParse({ ...env, BOOTSTRAP_METER_CONSTANT: value }).success, false);
   }
@@ -40,13 +40,15 @@ test("provisioning stores explicit calibration; reseeding rotates only credentia
     async upsert(write) {
       if (saved) {
         // Apply all supplied update fields, so an accidental calibration update fails this test.
-        saved = { ...saved, ...write.update };
+        assert.ok(typeof write.update.apiKeyHash === "string");
+        assert.equal(write.update.meterConstant, undefined);
+        saved = Object.assign({}, saved, write.update);
       } else {
         assert.ok(write.create.meterState?.create);
         createdState = true;
         saved = {
           id: "test-id", hardwareId: write.create.hardwareId, apiKeyHash: write.create.apiKeyHash,
-          meterConstant: write.create.meterConstant, name: null, firmwareVersion: null,
+          meterConstant: write.create.meterConstant, name: null, firmwareVersion: null, claimCodeHash: null,
           isActive: true, lastSeenAt: null, createdAt: new Date(), updatedAt: new Date(),
         };
       }

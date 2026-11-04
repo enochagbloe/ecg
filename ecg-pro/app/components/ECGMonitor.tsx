@@ -2,12 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { io } from "socket.io-client";
+import Link from "next/link";
 
 import { createMeterUpdates, type PulseData } from "./meterUpdates";
 import OpticalDiagnostics from "./OpticalDiagnostics";
 import ConsumptionAnalytics from "./ConsumptionAnalytics";
 
 export default function ECGMonitor() {
+  const [tab, setTab] = useState<"overview" | "diagnostics">("overview");
   const [pulseData, setPulseData] = useState<PulseData | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -53,89 +55,42 @@ export default function ECGMonitor() {
     };
   }, []);
 
+  const deviceId = process.env.NEXT_PUBLIC_DEVICE_ID || "ECG-001";
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-3 sm:p-8">
-      <div className="max-w-7xl mx-auto">
-        <div className="bg-white rounded-2xl shadow-xl p-4 sm:p-8">
-          <div className="flex items-center justify-between mb-8">
-            <h1 className="text-3xl font-bold text-gray-800">ECG Energy Monitor</h1>
-            <div className="flex items-center gap-2">
-              <div
-                className={`w-3 h-3 rounded-full ${
-                  isConnected ? "bg-green-500" : "bg-red-500"
-                } animate-pulse`}
-              />
-              <span className="text-sm text-gray-600">
-                {isConnected ? "Connected" : "Disconnected"}
-              </span>
-            </div>
-          </div>
-
-          {pulseData ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              <MetricCard
-                title="Total Pulses"
-                value={pulseData.pulseCount}
-                unit="pulses"
-                color="blue"
-              />
-              <MetricCard
-                title="Energy Consumed"
-                value={pulseData.energyKWh.toFixed(3)}
-                unit="kWh"
-                color="green"
-              />
-              <MetricCard
-                title="Current Power"
-                value={pulseData.powerKw.toFixed(3)}
-                unit="kW"
-                color="purple"
-              />
-              <MetricCard
-                title="Last Update"
-                value={pulseData.timestamp ? new Date(pulseData.timestamp).toLocaleTimeString() : "—"}
-                unit=""
-                color="orange"
-              />
-            </div>
-          ) : (
-            <div className="text-center py-12">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4" />
-              <p className="text-gray-600">{loadError || "Waiting for data..."}</p>
-            </div>
-          )}
-          <ConsumptionAnalytics deviceId={process.env.NEXT_PUBLIC_DEVICE_ID || "ECG-001"} />
-          <OpticalDiagnostics deviceId={process.env.NEXT_PUBLIC_DEVICE_ID || "ECG-001"} />
+    <div className="monitor-app">
+      <header className="monitor-header">
+        <Link className="monitor-brand" href="/" aria-label="GridLoRa home">
+          <span className="brand-symbol" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M13 2 5 13h6l-1 9 9-13h-6l1-7Z" fill="currentColor" /></svg></span>
+          <span>GridLoRa<span className="brand-divider">/</span><span className="brand-product">Energy intelligence</span></span>
+        </Link>
+        <div className="header-device"><span className={isConnected ? "connection-dot connected" : "connection-dot"} />{isConnected ? "Live connection" : "Reconnecting"}<span className="device-tag">{deviceId}</span></div>
+      </header>
+      <nav className="monitor-tabs" role="tablist" aria-label="Dashboard sections" onKeyDown={event => {
+        if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const next = event.key === "Home" ? "overview" : event.key === "End" ? "diagnostics" : tab === "overview" ? "diagnostics" : "overview";
+        setTab(next);
+        event.currentTarget.querySelector<HTMLButtonElement>(`#${next}-tab`)?.focus();
+      }}>
+        <button id="overview-tab" role="tab" tabIndex={tab === "overview" ? 0 : -1} aria-selected={tab === "overview"} aria-controls="overview-panel" onClick={() => setTab("overview")}>Overview</button>
+        <button id="diagnostics-tab" role="tab" tabIndex={tab === "diagnostics" ? 0 : -1} aria-selected={tab === "diagnostics"} aria-controls="diagnostics-panel" onClick={() => setTab("diagnostics")}>Diagnostics</button>
+      </nav>
+      <main className="monitor-main">
+        <div id="overview-panel" role="tabpanel" aria-labelledby="overview-tab" hidden={tab !== "overview"}>
+          <ConsumptionAnalytics deviceId={deviceId} />
         </div>
-      </div>
-    </div>
-  );
-}
-
-interface MetricCardProps {
-  title: string;
-  value: string | number;
-  unit: string;
-  color: "blue" | "green" | "purple" | "orange";
-}
-
-function MetricCard({ title, value, unit, color }: MetricCardProps) {
-  const colorClasses = {
-    blue: "from-blue-500 to-blue-600",
-    green: "from-green-500 to-green-600",
-    purple: "from-purple-500 to-purple-600",
-    orange: "from-orange-500 to-orange-600",
-  };
-
-  return (
-    <div className="bg-gradient-to-br from-gray-50 to-gray-100 rounded-xl p-6 border border-gray-200">
-      <h3 className="text-sm font-medium text-gray-600 mb-2">{title}</h3>
-      <div className="flex items-baseline gap-2">
-        <span className={`text-3xl font-bold bg-gradient-to-r ${colorClasses[color]} text-transparent bg-clip-text`}>
-          {value}
-        </span>
-        {unit && <span className="text-sm text-gray-500">{unit}</span>}
-      </div>
+        <div id="diagnostics-panel" role="tabpanel" aria-labelledby="diagnostics-tab" hidden={tab !== "diagnostics"}>
+          <div className="page-heading"><div><p className="eyebrow">DEVICE WORKSPACE</p><h1>Meter diagnostics</h1><p>Sensor health, pulse delivery and connection details.</p></div><span className="device-tag">{deviceId}</span></div>
+          <div className="device-health-strip">
+            <div><span>Stored pulses</span><strong>{pulseData?.pulseCount.toLocaleString() ?? "—"}</strong></div>
+            <div><span>Lifetime energy</span><strong>{pulseData ? pulseData.energyKWh.toFixed(3) + " kWh" : "—"}</strong></div>
+            <div><span>Last measured pulse</span><strong>{pulseData?.timestamp ? new Date(pulseData.timestamp).toLocaleString(undefined, { timeZone: "Africa/Accra" }) : "No measurement"}</strong></div>
+          </div>
+          {loadError && <p role="alert" className="analytics-error">{loadError}</p>}
+          <OpticalDiagnostics deviceId={deviceId} />
+        </div>
+      </main>
+      <footer className="monitor-footer"><span>GridLoRa · Electricity monitoring</span><span>Measured with optical meter pulses</span></footer>
     </div>
   );
 }

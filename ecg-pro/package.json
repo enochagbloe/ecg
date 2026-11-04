@@ -25,6 +25,7 @@
     "pino": "^10.1.0",
     "react": "19.2.1",
     "react-dom": "19.2.1",
+    "recharts": "^3.10.1",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",
     "tsx": "^4.21.0",

@@ -10,7 +10,9 @@ Uses the same signed dashboard-viewer session/Basic authentication as the existi
 
 Ranges are limited to 366 days and 1,800 buckets. The UI automatically coarsens an unreasonable resolution and explains the adjustment; direct API requests receive HTTP 400. Seconds, minutes and hours align to UTC boundaries; days align to local midnight and use the actual duration on 23/25-hour DST days. Edge buckets are clipped to the selected range.
 
-The SVG chart has gap-preserving paths, adaptive time labels, metric/calculation controls, pointer/touch inspection, keyboard arrow inspection and accessible percentage zoom sliders. It retains full-resolution spike peaks separately from bucket averages. Second-resolution responses also include up to 200 exact pulse details with a truncation indicator. Narrow the time range to inspect earlier pulses. No chart runtime dependency was added.
+The dashboard opens on a full-width Overview with current load, today's energy, range energy and peak demand. A separate Diagnostics tab contains optical diagnostics and lifetime device counters; panels remain mounted to preserve subscriptions and state. The default view covers 24 hours at minute resolution. Live monitoring and custom filtering remain available.
+
+Recharts renders power as a filled stepped area and bucket energy as columns, with adaptive time labels, a detailed hover card, peak marker, keyboard navigation and a draggable time navigator. Gaps are preserved, and interpolation does not smooth away real load changes. Range average, peak bucket average, coverage and last measurement sit below the graph. Advanced resolution, timezone and calculation controls live under View settings. Second-resolution responses also include up to 200 exact pulse details in the expandable Pulse explorer, with a truncation indicator. Narrow the time range to inspect earlier pulses.
 
 ## Calculations and missing data
 
@@ -46,6 +48,6 @@ PostgreSQL performs grouping and interval apportionment; no unbounded raw event 
 - `pnpm lint`: passed with five existing warnings in `injest/test.ts`, `scripts/set-customer-password.ts`, and `server/routes/customerAuth.ts`.
 - `TEST_DATABASE_URL=<isolated local database> pnpm test`: 58 passed, zero failed or skipped. Includes existing authentication, ingestion/deduplication, reset/socket, provisioning and customer tests; new tests execute production SQL in PGlite and the full analytics HTTP route in native PostgreSQL.
 - `pnpm build`: production Next.js build passed. Existing Google-font downloads require network access. Existing baseline-browser-mapping age warnings remain.
-- Browser visual verification: attempted but unavailable because local browser use is disabled in Work settings. Responsive/dark styling and keyboard/pointer handlers were reviewed in source; a browser interaction/accessibility audit remains a release follow-up.
+- Browser visual verification: unavailable. Browser tools report local browser use disabled; the desktop fallback was stopped because computer-use could not verify the browser URL with enough confidence to enforce policy. No further browser interaction was attempted. Responsive/dark styling and keyboard/pointer handlers were reviewed in source; a browser interaction/accessibility audit remains a release follow-up.
 
 PGlite is a development-only dependency used to execute actual PostgreSQL queries without external database credentials; see its [API documentation](https://pglite.dev/docs/api). Test data is isolated from production and is never used as a substitute for actual dashboard measurements.

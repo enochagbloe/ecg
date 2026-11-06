@@ -1,0 +1,2 @@
+# Device authentication and private Wi-Fi material must stay local.
+firmware/**/secrets.h

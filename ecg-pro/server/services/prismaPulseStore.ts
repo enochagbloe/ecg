@@ -18,6 +18,13 @@ export function createPrismaPulseStore(client: PrismaClient): PulseStore {
           return (await tx.pulseEvent.findUnique({ where: { deviceId_sequence: { deviceId, sequence } }, select: { occurredAt: true } }))?.occurredAt ?? null;
         },
         async createEvent(data) { await tx.pulseEvent.create({ data }); },
+        async getEventTimes(deviceId, sequences) {
+          const rows = await tx.pulseEvent.findMany({
+            where: { deviceId, sequence: { in: sequences } }, select: { sequence: true, occurredAt: true },
+          });
+          return new Map(rows.map(row => [row.sequence, row.occurredAt]));
+        },
+        async createEvents(data) { await tx.pulseEvent.createMany({ data }); },
         async saveState(deviceId, state) {
           await tx.meterState.upsert({ where: { deviceId }, create: { deviceId, ...state }, update: state });
         },

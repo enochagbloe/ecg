@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type { Device } from "@prisma/client";
 import { energyFromPulses, powerFromInterval, type StoredState } from "../server/services/calculationService";
 import { hashSecret } from "../server/services/deviceAuthService";
-import { processPulse, pulseBroadcast, pulseSchema, type PulseInput, type PulseStore, type PulseTransaction } from "../server/services/pulseService";
+import { processPulse, processPulseBatch, pulseBatchSchema, pulseBroadcast, pulseSchema, type PulseInput, type PulseStore, type PulseTransaction } from "../server/services/pulseService";
 import { HttpError } from "../server/utils/http";
 
 const token = "test-only-high-entropy-device-token-000000000";
@@ -29,14 +29,24 @@ class MemoryStore implements PulseStore {
       const device = { ...this.device };
       let state = this.state ? { ...this.state } : null;
       const events = new Map(this.events);
+      const insert = (event: Parameters<PulseTransaction["createEvent"]>[0]) => {
+        assert.equal(events.has(event.sequence), false, "unique constraint");
+        events.set(event.sequence, event);
+      };
       const tx: PulseTransaction = {
         lockDevice: async (hardwareId) => hardwareId === device.hardwareId ? device : null,
         getState: async () => state,
         hasEvent: async (_id, sequence) => events.has(sequence),
         getEventTime: async (_id, sequence) => events.get(sequence)?.occurredAt ?? null,
-        createEvent: async (event) => {
-          assert.equal(events.has(event.sequence), false, "unique constraint");
-          events.set(event.sequence, event);
+        createEvent: async (event) => { insert(event); },
+        createEvents: async (rows) => { rows.forEach(insert); },
+        getEventTimes: async (_id, sequences) => {
+          const times = new Map<bigint, Date>();
+          for (const sequence of sequences) {
+            const event = events.get(sequence);
+            if (event) times.set(sequence, event.occurredAt);
+          }
+          return times;
         },
         saveState: async (_id, next) => {
           if (this.failSave) throw new Error("simulated write failure");
@@ -170,6 +180,60 @@ test("transaction failure rolls back raw event, state, and lastSeenAt", async ()
   assert.equal(store.events.size, 0);
   assert.equal(store.state, null);
   assert.equal(store.device.lastSeenAt, null);
+});
+
+function batch(first: number, count: number) {
+  return { deviceId: "ECG-001", events: Array.from({ length: count }, (_, i) => {
+    const sequence = first + i;
+    return { sequence, timestamp: input(sequence, sequence * 650).timestamp };
+  }) };
+}
+
+test("53 pulses drain in 50 plus 3 and preserve capture-time power", async () => {
+  const store = new MemoryStore();
+  const first = await processPulseBatch(store, batch(1, 50), token);
+  assert.deepEqual([first.firstSequence, first.ackThrough, first.acknowledged], [1, 50, 50]);
+  const last = await processPulseBatch(store, batch(51, 3), token);
+  assert.equal(last.ackThrough, 53);
+  assert.equal(last.state.totalPulses, 53);
+  assert.equal(last.state.powerKw, powerFromInterval(650, 1600));
+  assert.equal(last.state.lastPulseAt, batch(53, 1).events[0].timestamp);
+  assert.equal(store.events.get(52n)?.occurredAt.toISOString(), batch(52, 1).events[0].timestamp);
+});
+
+test("single in flight and lost batch response can be retried without double counting", async () => {
+  const store = new MemoryStore();
+  const first = batch(1, 1).events[0];
+  await Promise.all([
+    processPulse(store, { ...first, pulse: 1, deviceId: "ECG-001" }, token),
+    processPulseBatch(store, batch(1, 20), token),
+  ]);
+  const retry = await processPulseBatch(store, batch(1, 20), token);
+  assert.deepEqual([retry.inserted, retry.acknowledged, retry.ackThrough, retry.state.totalPulses], [0, 20, 20, 20]);
+});
+
+test("batch rejects collisions and rolls back on durable state failure", async () => {
+  const store = new MemoryStore();
+  await processPulse(store, input(2), token);
+  await assert.rejects(processPulseBatch(store, batch(1, 3), token),
+    (error: unknown) => error instanceof HttpError && error.status === 409);
+  assert.deepEqual([...store.events.keys()], [2n]);
+  store.failSave = true;
+  await assert.rejects(processPulseBatch(store, batch(3, 2), token), /simulated write failure/);
+  assert.deepEqual([...store.events.keys()], [2n]);
+  assert.equal(store.state?.totalPulses, 1n);
+});
+
+test("batch schema bounds size and rejects gaps, reversed order and extra fields", () => {
+  assert.equal(pulseBatchSchema.safeParse(batch(1, 50)).success, true);
+  // Fixed-width ISO milliseconds and a maximal device ID still fit readJson.
+  const payload = { deviceId: "A".repeat(128), events: batch(1, 50).events.map((event, i) =>
+    ({ ...event, sequence: Number.MAX_SAFE_INTEGER - 49 + i })) };
+  assert.ok(Buffer.byteLength(JSON.stringify(payload)) <= 4096);
+  for (const invalid of [batch(1, 0), batch(1, 51), batch(0, 2),
+    { ...batch(1, 2), events: [batch(1, 1).events[0], batch(3, 1).events[0]] },
+    { ...batch(1, 2), events: batch(1, 2).events.reverse() }, { ...batch(1, 2), pulse: 1 },
+  ]) assert.equal(pulseBatchSchema.safeParse(invalid).success, false);
 });
 for (const [meterConstant, energy, power] of [
   [800, 0.00125, 4.5],

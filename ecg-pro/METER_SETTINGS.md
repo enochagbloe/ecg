@@ -42,10 +42,10 @@ The matching S3 firmware integration is prepared in the local GridLoRa_S3_V2.1 p
 
 ## Deployment sequence
 
-This is a coordinated database and firmware rollout. **Quiesce device ingestion while deploying the migration and new backend**. Drain durable queues and stop flashes before powering devices down. Keep old backend instances from accepting events between the energy backfill and the new application taking over. The migration snapshots existing lifetime energy from the current constant; old ingestion code does not maintain the new ledger during a rolling mixed-version overlap. Do not run such an overlap.
+The additive migration runs inside one PostgreSQL transaction and briefly locks Device, PulseEvent and MeterState in ingestion lock order. Existing transactions finish before the backfill; new ingestion waits or retries with its original sequence identities. Database triggers maintain the energy ledger for both old and new ingestion code during a rolling deployment, initialize a previously absent state row, and reject legacy constant changes without a matching history period. This removes the manual ingestion-pause requirement for backend deployment. Firmware still requires flashes stopped and queues drained for physical reset.
 
-1. Preserve a database backup and verify restore procedures. Stop old-version ingestion.
-2. Apply the additive migration and deploy this backend. Retain all old pulse and ownership rows.
+1. Preserve a database recovery point. Confirm the target service, database schema and current totals.
+2. Deploy the additive migration and backend. Retain all old pulse and ownership rows.
 3. Validate Settings and unchanged diagnostics using the existing authenticated dashboard.
 4. Upload the prepared S3 firmware with user permission, without erasing flash. Let it connect and register its boot capability.
 5. Test a staged/cancelled change, then a controlled reset-confirmed meter change with the sensor detached. Check history and cumulative energy before reattaching.
@@ -54,6 +54,6 @@ Once a replacement has been activated, retain this backend version or a later hi
 
 ## Validation boundaries
 
-Tests exercise the actual migration and analytics SQL in isolated PGlite PostgreSQL, service transaction/rollback contracts, HTTP authentication and ownership rejection, replay and duplicate ingestion, cross-period batches, and reset challenge idempotence. Three existing tests that need a separate PostgreSQL server remain opt-in. Firmware host tests exercise real C++ modules with simulated storage, network and random boot identities. These checks do not prove physical reset behavior, power-loss endurance, sensor accuracy, browser rendering or production migration performance. No production database changes or device upload are part of this branch.
+Tests exercise the actual migration and analytics SQL in isolated PGlite PostgreSQL, service transaction/rollback contracts, HTTP authentication and ownership rejection, replay and duplicate ingestion, cross-period batches, and reset challenge idempotence. Three existing tests that need a separate PostgreSQL server remain opt-in locally; deployment validation also exercises the migration on a Neon child branch before production. Firmware host tests exercise real C++ modules with simulated storage, network and random boot identities. These checks do not prove physical reset behavior, power-loss endurance, sensor accuracy, browser rendering or production migration performance. No production database changes or device upload are part of this branch.
 
 The production build uses Next.js's supported Webpack compiler. Tailwind scans the application directory explicitly so local dependency/build caches are excluded. The Windows Turbopack/PostCSS run stalled; the Webpack production build completed. Application dependency versions and the lockfile remain unchanged.

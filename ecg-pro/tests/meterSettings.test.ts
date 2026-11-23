@@ -280,6 +280,20 @@ test("PostgreSQL migration preserves customer ownership, usage and mixed-meter a
         rows.reduce((n, r) => n + r.energyKWh, 0) - (2 / 1000 + 2 / 1005),
       ) < 1e-12,
     );
+    // Old ingestion omits energyKWh when updating state. The INSERT trigger
+    // must preserve its already-committed energy even during rolling cutover.
+    await db.exec(`UPDATE "MeterState" SET "totalPulses"=4,"lastSequence"=4 WHERE "deviceId"='d';`);
+    const ledger=async()=>Number((await db.query<{energyKWh:number}>(`SELECT "energyKWh" FROM "MeterState" WHERE "deviceId"='d'`)).rows[0].energyKWh);
+    assert.ok(Math.abs(await ledger()-(2/1000+2/1005))<1e-12);
+    await db.exec(`INSERT INTO "PulseEvent" (id,"deviceId",sequence,"occurredAt") VALUES ('retry','d',4,now()) ON CONFLICT DO NOTHING;`);
+    assert.ok(Math.abs(await ledger()-(2/1000+2/1005))<1e-12);
+    await db.exec(`BEGIN; INSERT INTO "PulseEvent" (id,"deviceId",sequence,"occurredAt") VALUES ('rollback','d',5,now()); ROLLBACK;`);
+    assert.ok(Math.abs(await ledger()-(2/1000+2/1005))<1e-12);
+    await assert.rejects(db.exec(`UPDATE "Device" SET "meterConstant"=1006 WHERE id='d'`),/reset-confirmed/);
+    await db.exec(`INSERT INTO "Device" (id,"hardwareId","apiKeyHash","meterConstant","updatedAt") VALUES ('fresh','FRESH','${"a".repeat(64)}',1000,now());
+      INSERT INTO "PulseEvent" (id,"deviceId",sequence,"occurredAt") VALUES ('first','fresh',1,now());
+      INSERT INTO "MeterState" ("deviceId","totalPulses","lastSequence","updatedAt") VALUES ('fresh',1,1,now());`);
+    assert.equal(Number((await db.query<{energyKWh:number}>(`SELECT "energyKWh" FROM "MeterState" WHERE "deviceId"='fresh'`)).rows[0].energyKWh),.001);
     const details = await queryPulseDetails(client, "d", 1005, q);
     assert.equal(
       details.pulses.find((p) => p.sequence === "3")!.intervalSeconds,

@@ -1,12 +1,16 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 export default function DashboardLogin() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const [sessionExpired, setSessionExpired] = useState(false);
+  useEffect(() => {
+    setSessionExpired(new URLSearchParams(window.location.search).get("reason") === "session-expired");
+  }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -47,6 +51,7 @@ export default function DashboardLogin() {
 
         <form onSubmit={submit} className="rounded-2xl bg-white p-7 shadow-2xl sm:p-8">
           <h2 className="mb-6 text-xl font-semibold">Sign in</h2>
+          {sessionExpired && <p role="status" className="mb-5 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Your dashboard session has expired. Sign in again to continue.</p>}
           <label htmlFor="username" className="block text-sm font-medium text-slate-700">
             Username
           </label>

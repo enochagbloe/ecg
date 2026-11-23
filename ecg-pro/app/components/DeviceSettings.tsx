@@ -1,4 +1,6 @@
 "use client";
+import { dashboardFetch } from "./dashboardFetch";
+
 import { useEffect, useState } from "react";
 type Settings = {
   deviceId: string;
@@ -45,7 +47,7 @@ export default function DeviceSettings({ deviceId }: { deviceId: string }) {
     const controller = new AbortController();
     const load = async () => {
       try {
-        const r = await fetch(url, {
+        const r = await dashboardFetch(url, {
           cache: "no-store",
           signal: controller.signal,
         });
@@ -73,14 +75,14 @@ export default function DeviceSettings({ deviceId }: { deviceId: string }) {
     setError(null);
     setNotice("");
     try {
-      const r = await fetch(url, {
+      const r = await dashboardFetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       const result = await r.json();
       if (!r.ok) throw Error(result.error || "Unable to save settings");
-      const refreshed = await fetch(url, { cache: "no-store" });
+      const refreshed = await dashboardFetch(url, { cache: "no-store" });
       if (!refreshed.ok)
         throw Error("Saved; refresh to see the latest settings");
       setData(await refreshed.json());
@@ -113,7 +115,7 @@ export default function DeviceSettings({ deviceId }: { deviceId: string }) {
         </p>
       )}
       {!data ? (
-        <p role="status">Loading settings...</p>
+        error ? <p>Settings could not be loaded. <a className="secondary-button" href="/">Reload dashboard</a></p> : <p role="status">Loading settings...</p>
       ) : (
         <>
           <div className="settings-grid">

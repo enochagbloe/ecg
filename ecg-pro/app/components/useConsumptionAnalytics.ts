@@ -1,4 +1,6 @@
 "use client";
+import { dashboardFetch } from "./dashboardFetch";
+
 
 import { useEffect, useRef, useState } from "react";
 import { io } from "socket.io-client";
@@ -50,7 +52,7 @@ export function useConsumptionAnalytics(deviceId: string) {
         if (!(duration > 0) || duration > 366 * 86400) throw new Error("Choose a start before the end, within 366 days.");
         const effective = (Object.keys(steps) as Resolution[]).find(r => steps[r] >= steps[resolution] && Math.ceil(duration / steps[r]) + 2 <= 1800) || "days";
         const params = new URLSearchParams({ start: begin, end: finish, resolution: effective, timezone });
-        const response = await fetch(`/api/v1/devices/${encodeURIComponent(deviceId)}/analytics?${params}`, { cache: "no-store", credentials: "same-origin", signal: controller.signal });
+        const response = await dashboardFetch(`/api/v1/devices/${encodeURIComponent(deviceId)}/analytics?${params}`, { cache: "no-store", credentials: "same-origin", signal: controller.signal });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || "Unable to load analytics.");
         if (!controller.signal.aborted) { setData(result); setError(""); }

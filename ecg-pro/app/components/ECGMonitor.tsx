@@ -1,4 +1,6 @@
 "use client";
+import { dashboardFetch, redirectToDashboardLogin } from "./dashboardFetch";
+
 
 import { useEffect, useState } from "react";
 import { io } from "socket.io-client";
@@ -29,7 +31,7 @@ export default function ECGMonitor() {
     const loadState = async () => {
       const token = updates.beginSnapshot();
       try {
-        const response = await fetch(
+        const response = await dashboardFetch(
           `/api/v1/devices/${encodeURIComponent(deviceId)}/state`,
           {
             credentials: "same-origin",
@@ -73,8 +75,14 @@ export default function ECGMonitor() {
       setIsConnected(true);
       void loadState();
     });
-    socketInstance.on("disconnect", () => setIsConnected(false));
-    socketInstance.on("connect_error", () => setIsConnected(false));
+    socketInstance.on("disconnect", (reason) => {
+      setIsConnected(false);
+      if (reason === "io server disconnect") void loadState();
+    });
+    socketInstance.on("connect_error", (error) => {
+      setIsConnected(false);
+      if (error.message === "Authentication required") redirectToDashboardLogin();
+    });
     socketInstance.on("pulseData", updates.pulse);
     socketInstance.on("deviceReset", updates.reset);
     void loadState();

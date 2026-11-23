@@ -44,6 +44,7 @@ export async function provisionBootstrapDevice(store: BootstrapDeviceStore, inpu
       meterConstant,
       claimCodeHash: claimCodeHash ?? null,
       meterState: { create: {} },
+      meterPeriods: { create: { startSequence: 0n, meterConstant, label: "Original configuration" } },
     },
     update: {
       apiKeyHash,

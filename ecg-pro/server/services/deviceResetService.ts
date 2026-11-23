@@ -22,7 +22,10 @@ export function createPrismaDeviceResetStore(client: PrismaClient): DeviceResetS
           Prisma.sql`SELECT "id", "hardwareId" FROM "Device" WHERE "hardwareId" = ${hardwareId} FOR UPDATE`);
         return rows[0] ?? null;
       },
-      async deleteEvents(deviceId) { await tx.pulseEvent.deleteMany({ where: { deviceId } }); },
+      async deleteEvents(deviceId) {
+        if (await tx.meterPeriod.count({ where: { deviceId } }) || await tx.pulseEvent.count({ where: { deviceId } })) throw new HttpError(409, "Production meter history cannot be erased. Use Settings for meter changes");
+        await tx.pulseEvent.deleteMany({ where: { deviceId } });
+      },
       async saveState(deviceId, state) {
         await tx.meterState.upsert({ where: { deviceId }, create: { deviceId, ...state }, update: state });
       },

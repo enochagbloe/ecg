@@ -4,6 +4,7 @@ import next from "next";
 import { initializeSocket, getIO } from "./socketServer";
 import logger from "../libs/logger";
 import { prisma } from "../libs/prisma";
+import { meterSettings, deviceBoot } from "./routes/meterSettings";
 import { devicePulse } from "./routes/devicePulse";
 import { deviceState } from "./routes/deviceState";
 import { deviceAnalytics } from "./routes/deviceAnalytics";
@@ -149,6 +150,9 @@ async function main() {
         return;
       }
 
+      if (pathname === "/api/v1/device/boot") { await deviceBoot(req,res); return; }
+      const settingsMatch = /^\/api\/v1\/(customer\/)?devices\/([A-Za-z0-9_-]+)\/settings$/.exec(pathname);
+      if (settingsMatch) { await meterSettings(req,res,settingsMatch[2],!!settingsMatch[1]); return; }
       if (pathname === "/api/v1/device/pulse") {
         if (req.method !== "POST") {
           res.setHeader("Allow", "POST");

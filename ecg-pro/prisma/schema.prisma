@@ -22,6 +22,8 @@ model Device {
   pulseEvents     PulseEvent[]
   meterState      MeterState?
   ownership       DeviceOwnership?
+  settings        DeviceSettings?
+  meterPeriods    MeterPeriod[]
 }
 
 model CustomerUser {
@@ -79,6 +81,43 @@ model MeterState {
   lastSequence   BigInt?
   lastPulseAt    DateTime? @db.Timestamptz(3)
   lastIntervalMs BigInt?
+  energyKWh      Float     @default(0)
   powerKw        Float     @default(0)
   updatedAt      DateTime  @updatedAt @db.Timestamptz(3)
+}
+
+model DeviceSettings {
+ deviceId String @id
+ device Device @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+ bootId String?
+ bootFirstSeenAt DateTime? @db.Timestamptz(3)
+ bootHead BigInt?
+ firmwareVersion String?
+ pendingConstant Int?
+ pendingLabel String?
+ requestedAt DateTime? @db.Timestamptz(3)
+ expectedBootId String?
+ requestId String?
+ completedRequestId String?
+ armedAt DateTime? @db.Timestamptz(3)
+}
+model MeterPeriod {
+ revision Int @unique @default(autoincrement())
+ id String @id @default(cuid())
+ deviceId String
+ device Device @relation(fields: [deviceId], references: [id], onDelete: Restrict)
+ startSequence BigInt
+ meterConstant Int
+ label String
+ effectiveAt DateTime @default(now()) @db.Timestamptz(3)
+ confirmedBootId String?
+ @@index([deviceId, startSequence])
+}
+
+model DeviceBoot {
+ deviceId String
+ bootId String
+ bootHead BigInt
+ firstSeenAt DateTime @default(now()) @db.Timestamptz(3)
+ @@id([deviceId,bootId])
 }

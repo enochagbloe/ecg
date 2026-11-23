@@ -10,6 +10,15 @@ export function createPrismaPulseStore(client: PrismaClient): PulseStore {
           const rows = await tx.$queryRaw<Device[]>(Prisma.sql`SELECT * FROM "Device" WHERE "hardwareId" = ${hardwareId} FOR UPDATE`);
           return rows[0] ?? null;
         },
+        async samePeriod(deviceId, previous, sequence) {
+          if(previous===null)return false;
+          const p=await tx.meterPeriod.findFirst({where:{deviceId,startSequence:{lte:sequence}},orderBy:[{startSequence:"desc"},{revision:"desc"}]});
+          return previous >= (p?.startSequence ?? 0n);
+        },
+        async constantForSequence(deviceId, sequence, fallback) {
+          const period = await tx.meterPeriod.findFirst({ where: { deviceId, startSequence: { lte: sequence } }, orderBy: [{ startSequence: "desc" }, { revision: "desc" }] });
+          return period?.meterConstant ?? fallback;
+        },
         getState: (deviceId) => tx.meterState.findUnique({ where: { deviceId } }),
         async hasEvent(deviceId, sequence) {
           return (await tx.pulseEvent.findUnique({ where: { deviceId_sequence: { deviceId, sequence } }, select: { id: true } })) !== null;

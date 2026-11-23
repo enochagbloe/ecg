@@ -2,7 +2,7 @@ import { meterConstantSchema } from "./meterConstant";
 import type { MeterState } from "@prisma/client";
 
 export type StoredState = Pick<MeterState,
-  "totalPulses" | "lastSequence" | "lastPulseAt" | "lastIntervalMs" | "powerKw">;
+  "totalPulses" | "lastSequence" | "lastPulseAt" | "lastIntervalMs" | "powerKw"> & { energyKWh?: number };
 
 export function emptyState(): StoredState {
   return { totalPulses: 0n, lastSequence: null, lastPulseAt: null, lastIntervalMs: null, powerKw: 0 };
@@ -20,7 +20,8 @@ export function powerFromInterval(intervalMs: number, meterConstant: number): nu
 }
 
 export function applyPulse(state: StoredState, sequence: bigint, occurredAt: Date, meterConstant: number, alignedClock: boolean): StoredState {
-  const next = { ...state, totalPulses: state.totalPulses + 1n };
+  const next = { ...state, totalPulses: state.totalPulses + 1n,
+    energyKWh: (state.energyKWh ?? energyFromPulses(state.totalPulses, meterConstant)) + 1 / meterConstant };
   energyFromPulses(next.totalPulses, meterConstant);
   // Older missing events contribute energy only, never live power or the sequence head.
   if (state.lastSequence !== null && sequence <= state.lastSequence) return next;
@@ -37,7 +38,7 @@ export function applyPulse(state: StoredState, sequence: bigint, occurredAt: Dat
 export function serializeState(state: StoredState, meterConstant: number) {
   return {
     totalPulses: Number(state.totalPulses),
-    energyKWh: energyFromPulses(state.totalPulses, meterConstant),
+    energyKWh: state.energyKWh ?? energyFromPulses(state.totalPulses, meterConstant),
     powerKw: state.powerKw,
     lastPulseAt: state.lastPulseAt?.toISOString() ?? null,
   };

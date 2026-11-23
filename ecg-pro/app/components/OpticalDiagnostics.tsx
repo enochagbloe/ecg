@@ -1,4 +1,6 @@
 "use client";
+import { dashboardFetch } from "./dashboardFetch";
+
 
 import { useEffect, useMemo, useState } from "react";
 import { io } from "socket.io-client";
@@ -46,7 +48,7 @@ export default function OpticalDiagnostics({ deviceId }: { deviceId: string }) {
     };
     const load = async () => {
       try {
-        const response = await fetch(`/api/v1/devices/${encodeURIComponent(deviceId)}/diagnostics`, {
+        const response = await dashboardFetch(`/api/v1/devices/${encodeURIComponent(deviceId)}/diagnostics`, {
           credentials: "same-origin",
           cache: "no-store",
           signal: controller.signal,

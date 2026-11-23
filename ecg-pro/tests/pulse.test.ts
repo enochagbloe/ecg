@@ -20,6 +20,7 @@ class MemoryStore implements PulseStore {
     meterConstant: 1600, isActive: true, lastSeenAt: null, firmwareVersion: null,
     createdAt: new Date(), updatedAt: new Date(),
   };
+  periods: {start:bigint;constant:number}[]=[];
   state: StoredState | null = null;
   events = new Map<bigint, { occurredAt: Date; receivedAt: Date }>();
   failSave = false;
@@ -35,6 +36,8 @@ class MemoryStore implements PulseStore {
       };
       const tx: PulseTransaction = {
         lockDevice: async (hardwareId) => hardwareId === device.hardwareId ? device : null,
+        constantForSequence: async (_id,sequence,fallback)=>this.periods.filter(p=>p.start<=sequence).at(-1)?.constant??fallback,
+        samePeriod: async (_id,previous,sequence)=>previous!==null && previous>=(this.periods.filter(p=>p.start<=sequence).at(-1)?.start??0n),
         getState: async () => state,
         hasEvent: async (_id, sequence) => events.has(sequence),
         getEventTime: async (_id, sequence) => events.get(sequence)?.occurredAt ?? null,
@@ -254,3 +257,19 @@ for (const [meterConstant, energy, power] of [
     assert.equal(heartbeat.state.energyKWh, energy * 2);
   });
 }
+
+test("mixed-meter ingestion attributes offline replay by sequence and never creates power across a replacement",async()=>{
+ const s=new MemoryStore();s.device.meterConstant=1000;s.periods=[{start:0n,constant:1000}];
+ await processPulse(s,input(1,0),token);
+ s.device.meterConstant=1005;s.periods.push({start:3n,constant:1005});
+ await processPulse(s,input(3,2000),token);
+ await processPulse(s,input(2,1000),token); // Old queued pulse arrives after meter change.
+ await processPulse(s,input(3,2000),token); // Lost ACK retry.
+ assert.equal(s.state!.totalPulses,3n);assert.equal(s.state!.lastSequence,3n);
+ assert.ok(Math.abs(s.state!.energyKWh!-(2/1000+1/1005))<1e-12);
+ assert.equal(s.state!.powerKw,0);
+ const batched=new MemoryStore();batched.device.meterConstant=1005;batched.periods=s.periods;
+ const result=await processPulseBatch(batched,{deviceId:"ECG-001",events:[1,2,3,4].map(n=>({sequence:n,timestamp:input(n,(n-1)*1000).timestamp}))},token);
+ assert.ok(Math.abs(result.state.energyKWh-(2/1000+2/1005))<1e-12);
+ assert.equal(result.state.powerKw,3600000/(1005*1000));
+});

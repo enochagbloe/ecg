@@ -69,7 +69,7 @@ export default function ConsumptionAnalytics({ deviceId }: { deviceId: string })
     </div>
     {summary && summary.unplacedPulses > 0 && <p role="status" className="analytics-error">{summary.unplacedPulses} uploaded pulses have unreliable timestamps and are excluded from the chart.</p>}
     {data?.resolution === "seconds" && <details className="pulse-explorer"><summary><span><DashboardIcon name="meter" />Pulse explorer<small>Original measurements and upload times</small></span><span>{data.pulseDetails.pulses.length}{data.pulseDetails.truncated ? "+" : ""} pulses<span aria-hidden="true"> ＋</span></span></summary>
-      <div className="pulse-explorer-content"><p>{data.pulseDetails.truncated ? "Latest 200 pulses shown. Narrow the range to inspect earlier measurements." : "All recorded pulses in this range."} Each pulse contributes {number(1 / data.meterConstant, 6)} kWh. Times below are UTC.</p>
+      <div className="pulse-explorer-content"><p>{data.pulseDetails.truncated ? "Latest 200 pulses shown. Narrow the range to inspect earlier measurements." : "All recorded pulses in this range."} Each pulse uses the IMP/kWh configuration active for its meter. Times below are UTC.</p>
         <div className="analytics-table-scroll"><table><caption className="sr-only">Pulse measurements for {deviceId}</caption><thead><tr><th>Sequence</th><th>Measured at (UTC)</th><th>Interval</th><th>Estimated load</th><th>Uploaded at (UTC)</th></tr></thead><tbody>{data.pulseDetails.pulses.map(p => <tr key={p.sequence}><td>{p.sequence}</td><td>{p.timestamp}</td><td>{number(p.intervalSeconds)} s</td><td>{number(p.powerKw)} kW</td><td>{p.receivedAt}</td></tr>)}</tbody></table></div>
       </div>
     </details>}

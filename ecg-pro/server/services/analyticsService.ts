@@ -29,16 +29,18 @@ export async function queryAnalytics(client: Pick<PrismaClient, "$queryRaw">, de
   return client.$queryRaw<Row[]>(Prisma.sql`
     WITH buckets AS (${buckets}),
     events AS MATERIALIZED (
-      SELECT e.* FROM "PulseEvent" e WHERE e."deviceId" = ${deviceId}
+      SELECT e.*, coalesce(m."meterConstant", ${meterConstant}) AS constant,
+        coalesce(m."startSequence", 0) AS period FROM "PulseEvent" e
+      LEFT JOIN LATERAL (SELECT "meterConstant", "startSequence" FROM "MeterPeriod" WHERE "deviceId"=e."deviceId" AND "startSequence"<=e.sequence ORDER BY "startSequence" DESC, revision DESC LIMIT 1) m ON true WHERE e."deviceId" = ${deviceId}
         AND e."occurredAt" >= ${q.start}::timestamptz - ${maxIntervalSeconds} * interval '1 second'
         AND e."occurredAt" < ${q.end}::timestamptz + ${maxIntervalSeconds} * interval '1 second'
         AND e."occurredAt" >= '2020-01-01'::timestamptz
         AND e."occurredAt" <= e."receivedAt" + interval '5 minutes'
     ), intervals AS MATERIALIZED (
       SELECT e."occurredAt" AS finish, p."occurredAt" AS start,
-        extract(epoch FROM e."occurredAt" - p."occurredAt")::float8 AS seconds
+        extract(epoch FROM e."occurredAt" - p."occurredAt")::float8 AS seconds, e.constant
       FROM events e JOIN "PulseEvent" p ON p."deviceId" = ${deviceId} AND p.sequence = e.sequence - 1
-      WHERE p."occurredAt" >= '2020-01-01'::timestamptz
+      WHERE p.sequence >= e.period AND p."occurredAt" >= '2020-01-01'::timestamptz
         AND p."occurredAt" <= p."receivedAt" + interval '5 minutes'
         AND e."occurredAt" > p."occurredAt"
         AND e."occurredAt" - p."occurredAt" <= ${maxIntervalSeconds} * interval '1 second'
@@ -48,17 +50,17 @@ export async function queryAnalytics(client: Pick<PrismaClient, "$queryRaw">, de
           AND x."occurredAt" >= p."occurredAt" AND x."occurredAt" <= e."occurredAt"
           AND x.sequence <> e.sequence AND x.sequence <> p.sequence)
     ), counts AS (
-      SELECT ${eventKey} AS key, count(*) AS n, min(e."occurredAt") AS first FROM events e
+      SELECT ${eventKey} AS key, count(*) AS n, sum(1.0 / e.constant) AS energy, min(e."occurredAt") AS first FROM events e
       WHERE e."occurredAt" >= ${q.start} AND e."occurredAt" < ${q.end} GROUP BY 1
     ), apportioned AS (
       SELECT s.key,
         sum(extract(epoch FROM least(v.finish, s.finish, ${q.end}) - greatest(v.start, s.key, ${q.start}))) AS covered,
-        sum(extract(epoch FROM least(v.finish, s.finish, ${q.end}) - greatest(v.start, s.key, ${q.start})) / v.seconds / ${meterConstant}) AS energy,
-        max(3600 / (${meterConstant} * v.seconds)) AS peak, min(v.seconds) AS shortest
+        sum(extract(epoch FROM least(v.finish, s.finish, ${q.end}) - greatest(v.start, s.key, ${q.start})) / v.seconds / v.constant) AS energy,
+        max(3600 / (v.constant * v.seconds)) AS peak, min(v.seconds) AS shortest
       FROM intervals v CROSS JOIN LATERAL (${segments}) s GROUP BY s.key
     )
     SELECT b.start, b.finish AS end, c.first AS "firstPulseAt", coalesce(c.n, 0)::int AS "pulseCount",
-      coalesce(c.n, 0)::float8 / ${meterConstant} AS "energyKWh", coalesce(i.energy, 0)::float8 AS "intervalEnergyKWh",
+      coalesce(c.energy, 0)::float8 AS "energyKWh", coalesce(i.energy, 0)::float8 AS "intervalEnergyKWh",
       CASE WHEN coalesce(i.covered, 0) >= extract(epoch FROM b.finish - b.start) - 0.000001
         THEN i.energy * 3600 / extract(epoch FROM b.finish - b.start) ELSE NULL END::float8 AS "powerKw",
       least(1, coalesce(i.covered, 0) / extract(epoch FROM b.finish - b.start))::float8 AS coverage,
@@ -73,23 +75,23 @@ export type PulseDetail = { sequence: string; timestamp: string; receivedAt: str
 
 export async function queryPulseDetails(client: Pick<PrismaClient, "$queryRaw">, deviceId: string, meterConstant: number, q: Query) {
   if (q.resolution !== "seconds") return { pulses: [] as PulseDetail[], truncated: false };
-  const rows = await client.$queryRaw<{ sequence: string; occurredAt: Date; receivedAt: Date; intervalSeconds: number | null }[]>(Prisma.sql`
+  const rows = await client.$queryRaw<{ sequence: string; occurredAt: Date; receivedAt: Date; intervalSeconds: number | null; constant: number }[]>(Prisma.sql`
     WITH recent AS (
       SELECT * FROM "PulseEvent" WHERE "deviceId" = ${deviceId} AND "occurredAt" >= ${q.start} AND "occurredAt" < ${q.end}
         AND "occurredAt" >= '2020-01-01'::timestamptz AND "occurredAt" <= "receivedAt" + interval '5 minutes'
       ORDER BY "occurredAt" DESC, sequence DESC LIMIT 201
     )
-    SELECT e.sequence::text, e."occurredAt", e."receivedAt",
-      CASE WHEN p."occurredAt" >= '2020-01-01'::timestamptz AND p."occurredAt" <= p."receivedAt" + interval '5 minutes'
+    SELECT e.sequence::text, e."occurredAt", e."receivedAt", coalesce(m."meterConstant", ${meterConstant}) AS constant,
+      CASE WHEN p.sequence >= coalesce(m."startSequence",0) AND p."occurredAt" >= '2020-01-01'::timestamptz AND p."occurredAt" <= p."receivedAt" + interval '5 minutes'
         AND e."occurredAt" > p."occurredAt" AND e."occurredAt" - p."occurredAt" <= ${maxIntervalSeconds} * interval '1 second'
         AND NOT EXISTS (SELECT 1 FROM "PulseEvent" x WHERE x."deviceId" = ${deviceId}
           AND x."occurredAt" >= p."occurredAt" AND x."occurredAt" <= e."occurredAt" AND x.sequence NOT IN (p.sequence, e.sequence))
         THEN extract(epoch FROM e."occurredAt" - p."occurredAt")::float8 ELSE NULL END AS "intervalSeconds"
-    FROM recent e LEFT JOIN "PulseEvent" p ON p."deviceId" = ${deviceId} AND p.sequence = e.sequence - 1
+    FROM recent e LEFT JOIN LATERAL (SELECT "meterConstant", "startSequence" FROM "MeterPeriod" WHERE "deviceId"=e."deviceId" AND "startSequence"<=e.sequence ORDER BY "startSequence" DESC, revision DESC LIMIT 1) m ON true LEFT JOIN "PulseEvent" p ON p."deviceId" = ${deviceId} AND p.sequence = e.sequence - 1
     ORDER BY e."occurredAt" DESC, e.sequence DESC
   `);
   return { pulses: rows.slice(0, 200).map(r => ({ sequence: r.sequence, timestamp: r.occurredAt.toISOString(), receivedAt: r.receivedAt.toISOString(),
-    intervalSeconds: r.intervalSeconds, powerKw: r.intervalSeconds === null ? null : 3600 / (meterConstant * r.intervalSeconds), energyKWh: 1 / meterConstant })), truncated: rows.length > 200 };
+    intervalSeconds: r.intervalSeconds, powerKw: r.intervalSeconds === null ? null : 3600 / (r.constant * r.intervalSeconds), energyKWh: 1 / r.constant })), truncated: rows.length > 200 };
 }
 
 export interface AnalyticsData {

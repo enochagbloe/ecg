@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "tsx server/index.ts",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "tsx server/start.ts",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",

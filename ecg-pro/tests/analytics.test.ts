@@ -17,7 +17,7 @@ async function pulse(sequence: number, time: number, received = base + 86400000)
   await db.query('INSERT INTO "PulseEvent" ("deviceId", sequence, "occurredAt", "receivedAt") VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING', ["test", sequence, new Date(time), new Date(received)]);
 }
 before(async () => {
-  await db.exec('CREATE TABLE "PulseEvent" ("deviceId" text, sequence bigint, "occurredAt" timestamptz, "receivedAt" timestamptz, UNIQUE ("deviceId", sequence)); CREATE INDEX ON "PulseEvent" ("deviceId", "occurredAt");');
+  await db.exec('CREATE TABLE "MeterPeriod" (revision serial, "deviceId" text, "startSequence" bigint, "meterConstant" int); CREATE TABLE "PulseEvent" ("deviceId" text, sequence bigint, "occurredAt" timestamptz, "receivedAt" timestamptz, UNIQUE ("deviceId", sequence)); CREATE INDEX ON "PulseEvent" ("deviceId", "occurredAt");');
 });
 after(async () => { await db.close(); });
 

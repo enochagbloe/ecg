@@ -141,6 +141,7 @@ export async function customerUpdateDevice(
     throw new HttpError(400, "Expected name and/or meterConstant");
   }
 
+  if (parsed.data.meterConstant !== undefined) throw new HttpError(409, "Use Settings to request a meter change and confirm a device restart");
   const device = await prisma.device.update({
     where: { id: ownership.device.id },
     data: parsed.data,

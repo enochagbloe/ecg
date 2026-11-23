@@ -22,6 +22,8 @@ export const pulseBatchSchema = pulseSchema.pick({ deviceId: true }).extend({
 export interface PulseTransaction {
   lockDevice(hardwareId: string): Promise<Device | null>;
   getState(deviceId: string): Promise<StoredState | null>;
+  samePeriod?(deviceId: string, previous: bigint | null, sequence: bigint): Promise<boolean>;
+  constantForSequence?(deviceId: string, sequence: bigint, fallback: number): Promise<number>;
   hasEvent(deviceId: string, sequence: bigint): Promise<boolean>;
   getEventTime(deviceId: string, sequence: bigint): Promise<Date | null>;
   createEvent(event: { deviceId: string; sequence: bigint; occurredAt: Date; receivedAt: Date }): Promise<void>;
@@ -65,7 +67,9 @@ export function processPulse(store: PulseStore, input: PulseInput, token: string
       const occurredAt = new Date(input.timestamp);
       const previousTime = current.lastSequence === null ? null : await tx.getEventTime(device.id, current.lastSequence);
       const alignedClock = previousTime?.getTime() === current.lastPulseAt?.getTime();
-      state = applyPulse(current, sequence, occurredAt, device.meterConstant, alignedClock);
+      const constant = await tx.constantForSequence?.(device.id, sequence, device.meterConstant) ?? device.meterConstant;
+      const previousConstant = current.lastSequence === null ? constant : await tx.constantForSequence?.(device.id, current.lastSequence, device.meterConstant) ?? device.meterConstant;
+      state = applyPulse(current, sequence, occurredAt, constant, alignedClock && constant === previousConstant && (await tx.samePeriod?.(device.id, current.lastSequence, sequence) ?? true));
       await tx.createEvent({ deviceId: device.id, sequence, occurredAt, receivedAt });
       await tx.saveState(device.id, state);
     }
@@ -109,8 +113,10 @@ export function processPulseBatch(store: PulseStore, input: z.infer<typeof pulse
         continue;
       }
       const previous = state.lastSequence === null ? undefined : times.get(state.lastSequence);
-      state = applyPulse(state, sequence, occurredAt, device.meterConstant,
-        previous?.getTime() === state.lastPulseAt?.getTime());
+      const constant = await tx.constantForSequence?.(device.id, sequence, device.meterConstant) ?? device.meterConstant;
+      const previousConstant = state.lastSequence === null ? constant : await tx.constantForSequence?.(device.id, state.lastSequence, device.meterConstant) ?? device.meterConstant;
+      state = applyPulse(state, sequence, occurredAt, constant,
+        previous?.getTime() === state.lastPulseAt?.getTime() && constant === previousConstant && (await tx.samePeriod?.(device.id, state.lastSequence, sequence) ?? true));
       times.set(sequence, occurredAt);
       inserts.push({ deviceId: device.id, sequence, occurredAt, receivedAt });
     }
